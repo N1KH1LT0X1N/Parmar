@@ -1,0 +1,93 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f5f7fb;
+  color: #111827;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.status-chip {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.status-pending { background: #f3f4f6; color: #374151; }
+.status-queued { background: #fffbeb; color: #92400e; }
+.status-calling { background: #eff6ff; color: #1d4ed8; }
+.status-completed { background: #ecfdf5; color: #065f46; }
+.status-failed { background: #fef2f2; color: #991b1b; }
+.status-voicemail { background: #fff7ed; color: #9a3412; }
+
+.controls {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.controls input[type='file'] { flex: 1; }
+
+button {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.primary { background: #2563eb; color: white; }
+button.secondary { background: #e5e7eb; color: #111827; }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.table-wrap { overflow: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid #f0f2f5;
+  vertical-align: top;
+  font-size: 14px;
+}
+
+.muted { color: #6b7280; font-size: 13px; }
+.error { color: #b91c1c; margin: 8px 0; }
+.success { color: #065f46; margin: 8px 0; }
