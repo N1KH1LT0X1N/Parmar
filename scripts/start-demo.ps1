@@ -6,6 +6,7 @@ param(
 
 $root = Split-Path -Parent $PSScriptRoot
 $pythonExe = Join-Path $root ".venv\Scripts\python.exe"
+$alembicExe = Join-Path $root ".venv\Scripts\alembic.exe"
 $frontendDir = Join-Path $root "frontend"
 
 if (-not (Test-Path $pythonExe)) {
@@ -15,6 +16,11 @@ if (-not (Test-Path $pythonExe)) {
 
 if (-not (Test-Path $frontendDir)) {
     Write-Error "Frontend directory not found at $frontendDir"
+    exit 1
+}
+
+if (-not (Test-Path $alembicExe)) {
+    Write-Error "Alembic executable not found at $alembicExe"
     exit 1
 }
 
@@ -30,6 +36,16 @@ if ($InstallDeps) {
     npm install
     Pop-Location
 }
+
+Write-Host "Applying backend migrations..."
+Push-Location (Join-Path $root "backend")
+& $alembicExe -c alembic.ini upgrade head
+if ($LASTEXITCODE -ne 0) {
+    Pop-Location
+    Write-Error "Failed to apply backend migrations."
+    exit 1
+}
+Pop-Location
 
 $backendCmd = "Set-Location '$root'; `$env:ENV_VALIDATION_MODE='$ValidationMode'; & '$pythonExe' -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000"
 $frontendCmd = "Set-Location '$frontendDir'; npm run dev"

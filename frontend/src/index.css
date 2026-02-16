@@ -66,6 +66,7 @@ body {
 .status-completed { background: #ecfdf5; color: #065f46; }
 .status-failed { background: #fef2f2; color: #991b1b; }
 .status-voicemail { background: #fff7ed; color: #9a3412; }
+.status-dnc { background: #ffedd5; color: #9a3412; }
 
 /* ---------- Interest chips ---------- */
 .interest-chip {
@@ -103,6 +104,7 @@ body {
 .stat-completed { background: #ecfdf5; color: #065f46; }
 .stat-failed { background: #fef2f2; color: #991b1b; }
 .stat-voicemail { background: #fff7ed; color: #9a3412; }
+.stat-dnc { background: #ffedd5; color: #9a3412; }
 
 /* ---------- Controls ---------- */
 .controls {
@@ -114,6 +116,10 @@ body {
 }
 
 .controls input[type='file'] { flex: 1; min-width: 180px; }
+.controls input[type='file']:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
 
 button {
   border: none;
@@ -126,10 +132,22 @@ button {
 
 button:hover:not(:disabled) { opacity: 0.85; }
 button:active:not(:disabled) { transform: scale(0.97); }
+button:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
 button.primary { background: #2563eb; color: white; }
 button.secondary { background: #e5e7eb; color: #111827; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-button.action-btn { background: #f97316; color: white; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+button.action-btn {
+  background: #f97316;
+  color: white;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
 button.action-btn:hover:not(:disabled) { background: #ea580c; }
 
 /* ---------- Table ---------- */
@@ -175,6 +193,17 @@ tr:hover td {
 .muted { color: #6b7280; font-size: 13px; }
 .error { color: #b91c1c; margin: 8px 0; }
 .success { color: #065f46; margin: 8px 0; }
+.sr-only {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
 
 /* ---------- Spinner ---------- */
 @keyframes spin {

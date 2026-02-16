@@ -1,36 +1,56 @@
-# Phase 1 Backend (Parmar AI Calling Agent)
+# Backend (Parmar AI Calling Agent)
 
-## Run
+FastAPI backend for:
+- lead uploads and campaign orchestration
+- outbound call initiation via Vapi
+- webhook processing (Vapi + Twilio)
+- hot-lead manager notifications via Twilio
 
-- Create/activate Python environment.
-- Install dependencies: `python -m pip install -r backend/requirements.txt`
-- Copy `.env.example` to `.env` and fill keys.
-- Optional env mode: `ENV_VALIDATION_MODE=warn` (default) or `strict`.
-- Start API: `python -m uvicorn app.main:app --app-dir backend --reload`
+## Setup
 
-## One-command Demo Launch
+1. Install dependencies:
+- `python -m pip install -r requirements.txt`
 
-- From repo root: `powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1`
-- Strict mode: `powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1 -ValidationMode strict`
-- Install deps before launch: `powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1 -InstallDeps`
-- Stop demo services: `powershell -ExecutionPolicy Bypass -File scripts/stop-demo.ps1`
+2. Configure environment:
+- Use repo-root `.env` (see `.env.example`)
 
-`start-demo` automatically stops stale demo processes, waits for backend health on `http://127.0.0.1:8000/health`, then launches frontend on `http://127.0.0.1:5173`.
+3. Run migrations:
+- `alembic -c alembic.ini upgrade head`
 
-## Vapi Webhook Configuration
+4. Start API:
+- `python -m uvicorn app.main:app --reload`
 
-- Do not send `webhookUrl` in create-call payload.
-- Configure webhook endpoint in Vapi assistant/dashboard settings.
-- Backend webhook endpoint: `POST /webhook/vapi`.
+## Important Environment Flags
 
-## Test
+- `DASHBOARD_API_KEY`: protects dashboard endpoints (`/upload`, `/leads`, `/start-campaign`, `/manager-status`, `/leads/{id}/do-not-contact`)
+- `VAPI_WEBHOOK_SECRET`: requires `X-Vapi-Secret` on `/webhook/vapi`
+- `TWILIO_VALIDATE_SIGNATURE=true`: validates `X-Twilio-Signature` on `/webhook/twilio-status`
+- `ENABLE_TEST_ENDPOINTS=true`: enables `/test/*` routes (disabled by default)
 
-- `python -m pytest backend/tests -q`
+Reliability tuning:
+- `MAX_CONCURRENT_CALLS`, `MAX_CALL_ATTEMPTS`, `JOB_POLL_INTERVAL_SECONDS`, `JOB_LEASE_SECONDS`
+- `VAPI_MAX_RETRIES`, `VAPI_CIRCUIT_*`
+- `TWILIO_MAX_RETRIES`, `TWILIO_CIRCUIT_*`
+- `WEBHOOK_DEDUPE_TTL_SECONDS`, `*_RETENTION_DAYS`
 
-## Implemented Endpoints
+## Endpoints
 
+Core:
+- `GET /health`
+- `GET /ready`
 - `POST /upload`
 - `GET /leads`
 - `POST /start-campaign`
 - `GET /manager-status`
+- `POST /leads/{lead_id}/do-not-contact`
+
+Webhooks:
 - `POST /webhook/vapi`
+- `POST /webhook/twilio-status`
+
+Optional test-only (requires `ENABLE_TEST_ENDPOINTS=true`):
+- `POST /test/mark-call-completed/{call_id}`
+- `POST /test/lead/{lead_id}/simulate-completion`
+
+## Testing
+- `python -m pytest tests -q`

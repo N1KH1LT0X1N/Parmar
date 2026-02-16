@@ -68,8 +68,12 @@ describe('App', () => {
     fireEvent.click(uploadButton)
 
     await waitFor(() => {
-      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining('/upload'), expect.any(FormData))
+      expect(axios.post).toHaveBeenCalled()
     })
+
+    const uploadCall = axios.post.mock.calls.find((args) => `${args[0]}`.includes('/upload'))
+    expect(uploadCall).toBeTruthy()
+    expect(uploadCall[1]).toBeInstanceOf(FormData)
   })
 
   it('renders lead table with all columns', async () => {

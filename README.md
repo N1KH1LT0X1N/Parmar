@@ -1,85 +1,70 @@
 # Parmar AI Calling Agent
 
-Production-style demo for outbound lead qualification using:
-- **Backend:** FastAPI + SQLModel (SQLite for demo)
-- **Frontend:** React + Vite
-- **Calling:** Vapi (with ElevenLabs voice)
-- **Messaging:** Twilio (WhatsApp sandbox/number)
-
-## Project Structure
-
-- `backend/` — APIs, queueing, webhook processing, qualification logic
-- `frontend/` — dashboard for upload/start/monitor
-- `docs/` — architecture, implementation notes, prompts, handoff docs
-- `scripts/` — helper scripts for starting/stopping/debugging demo
+Production-style outbound lead qualification stack:
+- `backend/`: FastAPI + SQLModel API, durable campaign queue, webhook processing
+- `frontend/`: React + Vite dashboard
+- `docs/`: prompts and runbooks
 
 ## Quick Start
 
-## 1) Prerequisites
-
+## 1. Prerequisites
 - Python 3.10+
 - Node.js 18+
-- Vapi account + assistant + phone number
-- Twilio account (trial/paid)
+- Vapi account (assistant + phone number)
+- Twilio account (for manager notifications)
 
-## 2) Environment
+## 2. Environment
+- Copy `.env.example` to `.env`
+- Fill required keys:
+  - `VAPI_API_KEY` (or `VAPI_PRIVATE_KEY`)
+  - `VAPI_ASSISTANT_ID`
+  - `VAPI_PHONE_NUMBER_ID`
+  - `TWILIO_ACCOUNT_SID`
+  - `TWILIO_AUTH_TOKEN`
+  - `TWILIO_FROM_NUMBER`
+  - `MANAGER_PHONE_NUMBER`
 
-Create `.env` in repo root using `.env.example` as base.
+Security-related recommended keys:
+- `DASHBOARD_API_KEY` (protect dashboard endpoints)
+- `VAPI_WEBHOOK_SECRET` (protect `/webhook/vapi`)
+- `TWILIO_VALIDATE_SIGNATURE=true` (verify Twilio callbacks)
 
-Required keys:
-- `VAPI_API_KEY` or `VAPI_PRIVATE_KEY`
-- `VAPI_ASSISTANT_ID`
-- `VAPI_PHONE_NUMBER_ID`
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_FROM_NUMBER`
-- `MANAGER_PHONE_NUMBER`
+## 3. Install
+- Backend: `python -m pip install -r backend/requirements.txt`
+- Frontend: `cd frontend && npm install`
 
-Optional:
-- `ENV_VALIDATION_MODE=warn` (or `strict`)
-- `VAPI_WEBHOOK_URL` (optional reference only; configure webhook endpoint in Vapi assistant/dashboard)
+## 4. Database Migration
+- Run migrations before startup:
+  - `cd backend`
+  - `alembic -c alembic.ini upgrade head`
 
-## 3) Install
-
-Backend:
-- `python -m pip install -r backend/requirements.txt`
-
-Frontend:
-- `cd frontend && npm install`
-
-## 4) Run (one command)
-
-- `powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1`
-
-What `start-demo` now does automatically:
-- Stops stale demo processes (`uvicorn`, `vite`, `npm run dev`) and clears listeners on ports `8000`/`5173`
-- Starts backend and waits for `GET /health` to return `200`
-- Starts frontend on `http://127.0.0.1:5173`
-
-Manual run:
+## 5. Run
 - Backend: `python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000`
 - Frontend: `cd frontend && npm run dev`
 
-## 5) Test
+Or use helper script:
+- `powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1`
 
+## 6. Test
 - Backend: `python -m pytest backend/tests -q`
 - Frontend: `cd frontend && npm run test && npm run build`
 
-## Trial-mode note
+## Key Robustness Features
+- Durable DB-backed campaign queue with retries and job leasing
+- Persistent webhook idempotency (`processedwebhookevent`)
+- Audit trail (`auditevent`) for campaign/webhook actions
+- Optional dashboard API-key protection and endpoint rate limits
+- Optional Vapi secret and Twilio signature validation
+- Security headers, CORS allow-list, and PII redaction in logs
+- Vapi/Twilio retry + circuit breaker protections
 
-On Twilio trial accounts, recipients may hear:
-"This is a trial account, press any number..."
+## CI
+GitHub Actions workflow (`.github/workflows/ci.yml`) runs:
+- backend tests
+- frontend tests + build
+- security checks (`bandit`, `pip-audit`, `npm audit`, `gitleaks`)
 
-This is expected trial behavior. Upgrade Twilio to remove it.
-
-## Vapi integration note
-
-- Outbound call creation uses Vapi `POST /call` with `assistantId`, `phoneNumberId`, and `customer`.
-- The backend does **not** send `webhookUrl` in the per-call payload (Vapi rejects this with `400`).
-- Configure webhook delivery in Vapi assistant/dashboard settings to point to `/webhook/vapi`.
-
-## Core Docs
-
-- `docs/2026-02-15-ai-calling-agent-final.md` — final architecture and plan
-- `docs/2026-02-15-implementation-status.md` — implementation/test status
-- `docs/vapi-system-prompt.md` — copy-paste Vapi prompt/settings
+## Additional Docs
+- `backend/README.md`
+- `docs/WEBHOOK-OPERATIONS-RUNBOOK.md`
+- `docs/vapi-system-prompt.md`
