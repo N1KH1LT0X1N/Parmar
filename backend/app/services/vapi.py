@@ -1,9 +1,15 @@
+import logging
 from typing import Any
 
 import httpx
 
 from app.config import Settings
 from app.models import Lead
+
+logger = logging.getLogger("parmar.vapi")
+
+_MAX_RETRIES = 2
+_TIMEOUT_SECONDS = 25
 
 
 class VapiService:
@@ -40,12 +46,30 @@ class VapiService:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(self.settings.vapi_api_url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+                    response = await client.post(self.settings.vapi_api_url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
 
-        call_id = data.get("id")
-        if not call_id:
-            raise RuntimeError("Vapi response did not include call id")
-        return call_id
+                call_id = data.get("id")
+                if not call_id:
+                    raise RuntimeError("Vapi response did not include call id")
+
+                logger.info("Outbound call created for %s (call_id=%s)", lead.name, call_id)
+                return call_id
+
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                logger.warning("Vapi timeout (attempt %d/%d) for %s", attempt, _MAX_RETRIES, lead.name)
+            except httpx.HTTPStatusError as exc:
+                # Don't retry client errors (4xx)
+                if 400 <= exc.response.status_code < 500:
+                    logger.error("Vapi client error %d for %s: %s", exc.response.status_code, lead.name, exc.response.text[:200])
+                    raise
+                last_exc = exc
+                logger.warning("Vapi server error %d (attempt %d/%d) for %s", exc.response.status_code, attempt, _MAX_RETRIES, lead.name)
+
+        raise last_exc or RuntimeError("Vapi call failed after retries")

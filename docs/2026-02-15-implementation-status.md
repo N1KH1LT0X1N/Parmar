@@ -41,7 +41,7 @@
 - `backend/tests/test_classifier.py`
 - `backend/tests/conftest.py`
 
-Result: `9 passed`
+Result: `42 passed`
 
 ## Phase 2 (Frontend) — Completed
 
@@ -62,7 +62,7 @@ Result: `9 passed`
 ### Tests
 - `frontend/src/__tests__/App.test.jsx`
 
-Result: `2 passed`
+Result: `8 passed`
 
 ## Validation Matrix (Final)
 
@@ -75,6 +75,16 @@ Result: `2 passed`
 - Startup env validation mode: **Implemented** (`warn`/`strict`)
 - One-command demo launcher: **Implemented** (`scripts/start-demo.ps1`)
 - One-command demo stopper: **Implemented** (`scripts/stop-demo.ps1`)
+
+## Post-Final Stability Updates (February 16, 2026)
+
+- Fixed frontend false-negative "Backend not reachable" state behavior.
+- Hardened demo launch scripts:
+  - `start-demo.ps1` now waits for backend health before launching frontend.
+  - `stop-demo.ps1` now aggressively clears stale listeners on ports `8000` and `5173`.
+- Fixed Vapi call payload compatibility:
+  - Removed deprecated `webhookUrl` from create-call payload in `backend/app/services/vapi.py`.
+  - Added regression test to ensure `webhookUrl` is never sent in call payload.
 
 ## Run Commands
 

@@ -37,6 +37,8 @@ This runbook helps teammates make safe changes quickly.
 - Keep API responses backward compatible where possible
 - Do not hardcode secrets or credentials
 - Use environment-driven config only
+- CSV phone values are normalized to E.164 where possible (India defaults supported)
+- Webhook processing is idempotent for duplicate end-of-call payloads
 - Preserve existing lead statuses:
   - `pending`, `queued`, `calling`, `completed`, `failed`, `voicemail`
 
@@ -45,6 +47,12 @@ This runbook helps teammates make safe changes quickly.
 - Twilio trial voice prompt may require recipient keypress
 - WhatsApp sandbox requires recipient join code
 - Real call completion depends on provider webhook timing
+
+## Vapi Webhook Setup (Important)
+
+- Configure webhook target in Vapi assistant/dashboard settings.
+- Do not include `webhookUrl` in per-call `POST /call` payloads; Vapi rejects it with `400`.
+- Use backend endpoint `POST /webhook/vapi` for end-of-call processing.
 
 ## Useful Files
 

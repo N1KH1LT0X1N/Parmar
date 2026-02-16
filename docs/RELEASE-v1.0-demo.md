@@ -7,6 +7,7 @@
 First complete demo release of the Parmar AI Calling Agent.
 
 This release includes:
+
 - Phase 1 backend (FastAPI + queue + webhook + lead classification)
 - Phase 2 frontend dashboard (upload, start campaign, live status polling)
 - Vapi outbound call integration and Twilio WhatsApp integration paths
@@ -15,6 +16,7 @@ This release includes:
 ## Included Components
 
 ### Backend
+
 - Lead ingestion API (`/upload`)
 - Lead listing API (`/leads`)
 - Campaign queue trigger (`/start-campaign`)
@@ -22,12 +24,14 @@ This release includes:
 - Manager status endpoint (`/manager-status`)
 
 ### Frontend
+
 - Campaign dashboard UI
 - CSV upload and start campaign actions
 - Live lead status table
 - Trial mode warning banner
 
 ### Scripts
+
 - `scripts/start-demo.ps1`
 - `scripts/stop-demo.ps1`
 - Vapi debug scripts for troubleshooting

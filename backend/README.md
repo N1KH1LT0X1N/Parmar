@@ -15,6 +15,14 @@
 - Install deps before launch: `powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1 -InstallDeps`
 - Stop demo services: `powershell -ExecutionPolicy Bypass -File scripts/stop-demo.ps1`
 
+`start-demo` automatically stops stale demo processes, waits for backend health on `http://127.0.0.1:8000/health`, then launches frontend on `http://127.0.0.1:5173`.
+
+## Vapi Webhook Configuration
+
+- Do not send `webhookUrl` in create-call payload.
+- Configure webhook endpoint in Vapi assistant/dashboard settings.
+- Backend webhook endpoint: `POST /webhook/vapi`.
+
 ## Test
 
 - `python -m pytest backend/tests -q`

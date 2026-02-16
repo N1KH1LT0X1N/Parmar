@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     vapi_assistant_id: str = ""
     vapi_phone_number_id: str = ""
     vapi_api_url: str = "https://api.vapi.ai/call"
+    vapi_webhook_url: str = ""  # Optional reference; configure webhooks in Vapi assistant/dashboard settings
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

@@ -37,6 +37,7 @@ Required keys:
 
 Optional:
 - `ENV_VALIDATION_MODE=warn` (or `strict`)
+- `VAPI_WEBHOOK_URL` (optional reference only; configure webhook endpoint in Vapi assistant/dashboard)
 
 ## 3) Install
 
@@ -49,6 +50,11 @@ Frontend:
 ## 4) Run (one command)
 
 - `powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1`
+
+What `start-demo` now does automatically:
+- Stops stale demo processes (`uvicorn`, `vite`, `npm run dev`) and clears listeners on ports `8000`/`5173`
+- Starts backend and waits for `GET /health` to return `200`
+- Starts frontend on `http://127.0.0.1:5173`
 
 Manual run:
 - Backend: `python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000`
@@ -65,6 +71,12 @@ On Twilio trial accounts, recipients may hear:
 "This is a trial account, press any number..."
 
 This is expected trial behavior. Upgrade Twilio to remove it.
+
+## Vapi integration note
+
+- Outbound call creation uses Vapi `POST /call` with `assistantId`, `phoneNumberId`, and `customer`.
+- The backend does **not** send `webhookUrl` in the per-call payload (Vapi rejects this with `400`).
+- Configure webhook delivery in Vapi assistant/dashboard settings to point to `/webhook/vapi`.
 
 ## Core Docs
 
