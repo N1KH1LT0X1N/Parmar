@@ -47,3 +47,13 @@ def test_create_outbound_call_does_not_send_webhook_url(monkeypatch):
     assert "webhookUrl" not in captured["payload"]
     assert captured["payload"]["assistantId"] == "assistant-id"
     assert captured["payload"]["phoneNumberId"] == "phone-number-id"
+    variable_values = captured["payload"]["assistantOverrides"]["variableValues"]
+    assert variable_values["name"] == "Nikhil"
+    assert variable_values["client_name"] == "Nikhil"
+    assert variable_values["customer_name"] == "Nikhil"
+    assert variable_values["phone"] == "+919876543210"
+    assert variable_values["location"] == "Bandra"
+    assert variable_values["preferred_location"] == "Bandra"
+    assert variable_values["notes"] == "Bandra"
+    assert "budget_range" not in variable_values
+    assert "bhk_preference" not in variable_values

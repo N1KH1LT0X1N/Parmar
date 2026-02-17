@@ -29,6 +29,11 @@ Security-related recommended keys:
 - `VAPI_WEBHOOK_SECRET` (protect `/webhook/vapi`)
 - `TWILIO_VALIDATE_SIGNATURE=true` (verify Twilio callbacks)
 
+Vapi preflight controls (recommended):
+- `VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN=true` (blocks `/start-campaign` on invalid Vapi config)
+- `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG=true` for deployed/tunneled webhook workflows
+- `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG=false` for local call-init testing without webhook deployment
+
 ## 3. Install
 - Backend: `python -m pip install -r backend/requirements.txt`
 - Frontend: `cd frontend && npm install`
@@ -49,6 +54,11 @@ Or use helper script:
 - Backend: `python -m pytest backend/tests -q`
 - Frontend: `cd frontend && npm run test && npm run build`
 
+## 7. Runtime Diagnostics
+- Vapi readiness: `GET /diagnostics/vapi-preflight`
+- Typical local-dev expectation (no webhook): `ok=true`, `assistant_has_server=false`
+- Typical full lifecycle expectation (with webhook): `ok=true` and assistant/phone/server checks all passing
+
 ## Key Robustness Features
 - Durable DB-backed campaign queue with retries and job leasing
 - Persistent webhook idempotency (`processedwebhookevent`)
@@ -68,3 +78,4 @@ GitHub Actions workflow (`.github/workflows/ci.yml`) runs:
 - `backend/README.md`
 - `docs/WEBHOOK-OPERATIONS-RUNBOOK.md`
 - `docs/vapi-system-prompt.md`
+- `docs/CONTRIBUTING-RUNBOOK.md`

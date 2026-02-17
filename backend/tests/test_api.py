@@ -197,6 +197,61 @@ def test_start_campaign_no_pending_leads(client):
     assert data["queued"] == 0
 
 
+def test_diagnostics_vapi_preflight_endpoint(client, monkeypatch):
+    async def fake_preflight(self):
+        return {
+            "ok": True,
+            "errors": [],
+            "warnings": ["test warning"],
+            "details": {"assistant_id": "assistant-id"},
+        }
+
+    monkeypatch.setattr("app.services.vapi.VapiService.preflight_check", fake_preflight)
+
+    response = client.get("/diagnostics/vapi-preflight")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["errors"] == []
+    assert payload["warnings"] == ["test warning"]
+
+
+def test_start_campaign_fails_when_preflight_fails(monkeypatch, db_session):
+    from app.config import get_settings
+    from app.database import get_engine
+    from app.main import create_app
+
+    monkeypatch.setenv("VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN", "true")
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+
+    lead = Lead(name="Preflight Lead", phone="+919811111199", status="pending")
+    db_session.add(lead)
+    db_session.commit()
+
+    async def fake_preflight(self):
+        return {
+            "ok": False,
+            "errors": ["phone_number_missing"],
+            "warnings": [],
+            "details": {},
+        }
+
+    monkeypatch.setattr("app.services.vapi.VapiService.preflight_check", fake_preflight)
+
+    with TestClient(create_app()) as local_client:
+        response = local_client.post("/start-campaign")
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["message"] == "Vapi preflight failed"
+    assert "phone_number_missing" in detail["errors"]
+
+    monkeypatch.setenv("VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN", "false")
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+
+
 def test_test_endpoints_disabled_by_default(client):
     response = client.post("/test/lead/1/simulate-completion")
     assert response.status_code == 404

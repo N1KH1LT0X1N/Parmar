@@ -45,7 +45,7 @@ from app.models import (
     MAX_SUMMARY_LENGTH,
     TERMINAL_STATUSES,
 )
-from app.schemas import CampaignResponse, ManagerStatus, UploadResponse, WebhookResponse
+from app.schemas import CampaignResponse, ManagerStatus, UploadResponse, VapiPreflightResponse, WebhookResponse
 from app.security import InMemoryRateLimiter, enforce_rate_limit, require_dashboard_auth
 from app.services.classifier import classify_interest, is_hot_lead
 from app.services.twilio_service import TwilioService
@@ -597,6 +597,33 @@ def create_app() -> FastAPI:
             max_per_minute=bucket_limit,
         )
 
+    async def _run_vapi_preflight_or_raise(session: Session) -> None:
+        if not settings.vapi_preflight_required_for_campaign:
+            return
+
+        preflight = await VapiService(settings).preflight_check()
+        if preflight.get("ok"):
+            return
+
+        write_audit_event(
+            session,
+            event_type="vapi_preflight_failed",
+            source="dashboard",
+            details={
+                "errors": preflight.get("errors", []),
+                "warnings": preflight.get("warnings", []),
+            },
+        )
+        session.commit()
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Vapi preflight failed",
+                "errors": preflight.get("errors", []),
+                "warnings": preflight.get("warnings", []),
+            },
+        )
+
     def _validate_vapi_secret(request: Request) -> None:
         if not settings.vapi_webhook_secret:
             return
@@ -719,6 +746,8 @@ def create_app() -> FastAPI:
             bucket_limit=settings.rate_limit_campaign_per_minute,
         )
 
+        await _run_vapi_preflight_or_raise(session)
+
         pending = session.exec(select(Lead).where(Lead.status == LEAD_STATUS_PENDING)).all()
         if not pending:
             return CampaignResponse(message="No pending leads to queue", queued=0)
@@ -765,6 +794,21 @@ def create_app() -> FastAPI:
             connected=bool(current_settings.twilio_from_number and current_settings.manager_phone_number),
             join_code=current_settings.manager_join_code,
             sandbox_number=current_settings.twilio_from_number,
+        )
+
+    @app.get("/diagnostics/vapi-preflight", response_model=VapiPreflightResponse, dependencies=[Depends(require_dashboard_auth)])
+    async def diagnostics_vapi_preflight(request: Request):
+        await _enforce_dashboard_request_limits(
+            request=request,
+            bucket="dashboard-vapi-preflight",
+            bucket_limit=settings.rate_limit_dashboard_per_minute,
+        )
+        preflight = await VapiService(settings).preflight_check()
+        return VapiPreflightResponse(
+            ok=bool(preflight.get("ok")),
+            errors=list(preflight.get("errors", [])),
+            warnings=list(preflight.get("warnings", [])),
+            details=dict(preflight.get("details", {})),
         )
 
     @app.post("/leads/{lead_id}/do-not-contact", response_model=WebhookResponse, dependencies=[Depends(require_dashboard_auth)])

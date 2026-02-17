@@ -24,3 +24,10 @@ class ManagerStatus(BaseModel):
 
 class WebhookResponse(BaseModel):
     status: str
+
+
+class VapiPreflightResponse(BaseModel):
+    ok: bool
+    errors: list[str]
+    warnings: list[str]
+    details: dict[str, object]

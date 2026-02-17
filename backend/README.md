@@ -13,6 +13,7 @@ FastAPI backend for:
 
 2. Configure environment:
 - Use repo-root `.env` (see `.env.example`)
+- Backend settings read only repo-root `.env` (not `backend/.env`) to avoid environment drift
 
 3. Run migrations:
 - `alembic -c alembic.ini upgrade head`
@@ -24,6 +25,12 @@ FastAPI backend for:
 
 - `DASHBOARD_API_KEY`: protects dashboard endpoints (`/upload`, `/leads`, `/start-campaign`, `/manager-status`, `/leads/{id}/do-not-contact`)
 - `VAPI_WEBHOOK_SECRET`: requires `X-Vapi-Secret` on `/webhook/vapi`
+- `VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN=true`: blocks `/start-campaign` when assistant/phone-number/webhook prechecks fail
+- `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG=true`: requires assistant-level server URL configuration for end-of-call webhooks
+- `VAPI_EXPECTED_SERVER_URL`: optional exact webhook URL check during preflight
+- `VAPI_VERIFY_ASSISTANT_BEFORE_CALL=true`: preflight fetches assistant config before dialing
+- `VAPI_EXPECTED_ASSISTANT_NAME`: optional exact-name guard to catch wrong `VAPI_ASSISTANT_ID`
+- `VAPI_EXPECTED_PROMPT_CONTAINS`: optional snippet guard to detect prompt drift/mismatch
 - `TWILIO_VALIDATE_SIGNATURE=true`: validates `X-Twilio-Signature` on `/webhook/twilio-status`
 - `ENABLE_TEST_ENDPOINTS=true`: enables `/test/*` routes (disabled by default)
 
@@ -42,6 +49,7 @@ Core:
 - `GET /leads`
 - `POST /start-campaign`
 - `GET /manager-status`
+- `GET /diagnostics/vapi-preflight`
 - `POST /leads/{lead_id}/do-not-contact`
 
 Webhooks:

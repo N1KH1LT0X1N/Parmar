@@ -15,6 +15,7 @@ def app(tmp_path_factory):
     os.environ["VAPI_API_KEY"] = "test-key"
     os.environ["VAPI_ASSISTANT_ID"] = "assistant-id"
     os.environ["VAPI_PHONE_NUMBER_ID"] = "phone-number-id"
+    os.environ["VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN"] = "false"
     os.environ["TWILIO_FROM_NUMBER"] = "whatsapp:+14155238886"
     os.environ["MANAGER_PHONE_NUMBER"] = "whatsapp:+919999999999"
     os.environ["MANAGER_JOIN_CODE"] = "join demo-room"

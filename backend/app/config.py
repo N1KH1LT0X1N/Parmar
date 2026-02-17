@@ -1,12 +1,16 @@
 ﻿from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(REPO_ROOT / ".env"), extra="ignore")
 
     app_name: str = "Parmar Properties AI Agent API"
     database_url: str = "sqlite:///./database.db"
@@ -14,9 +18,19 @@ class Settings(BaseSettings):
     vapi_api_key: str = Field(default="", validation_alias=AliasChoices("VAPI_API_KEY", "VAPI_PRIVATE_KEY"))
     vapi_assistant_id: str = ""
     vapi_phone_number_id: str = ""
+    vapi_base_url: str = "https://api.vapi.ai"
     vapi_api_url: str = "https://api.vapi.ai/call"
+    vapi_assistant_api_base_url: str = "https://api.vapi.ai/assistant"
     vapi_webhook_url: str = ""  # Optional reference only
     vapi_webhook_secret: str = ""
+    vapi_preflight_required_for_campaign: bool = True
+    vapi_preflight_timeout_seconds: int = Field(default=15, ge=5, le=120)
+    vapi_require_assistant_server_config: bool = True
+    vapi_expected_server_url: str = ""
+    vapi_verify_assistant_before_call: bool = False
+    vapi_assistant_verify_timeout_seconds: int = Field(default=10, ge=3, le=60)
+    vapi_expected_assistant_name: str = ""
+    vapi_expected_prompt_contains: str = ""
     vapi_max_retries: int = Field(default=3, ge=1, le=10)
     vapi_timeout_seconds: int = Field(default=25, ge=5, le=120)
     vapi_circuit_failure_threshold: int = Field(default=3, ge=1, le=20)

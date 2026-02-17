@@ -5,6 +5,7 @@
 Operational checks for:
 - `POST /webhook/vapi`
 - `POST /webhook/twilio-status`
+- `GET /diagnostics/vapi-preflight`
 
 ## Security Controls
 
@@ -13,6 +14,22 @@ Operational checks for:
 - Persistent webhook dedupe ledger table: `processedwebhookevent`.
 - Deduplication freshness window: `WEBHOOK_DEDUPE_TTL_SECONDS`.
 - Audit events table: `auditevent`.
+
+## Preflight-First Workflow
+
+Before running campaigns, call `GET /diagnostics/vapi-preflight`:
+- If `ok=true`, campaign is allowed.
+- If `ok=false`, resolve reported errors before retrying.
+
+Common preflight failures:
+- `phone_number_missing`: configured `VAPI_PHONE_NUMBER_ID` does not exist in current Vapi account.
+- `assistant_server_missing`: no assistant-level server URL while strict server requirement is enabled.
+
+## Local Operations (No Deployment)
+
+- For local call-init testing only, set `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG=false`.
+- In this mode, calls can start, but lead completion depends on webhook delivery and may remain `calling`.
+- For full local lifecycle, expose backend (`ngrok http 8000`) and set Vapi server URL to `https://<ngrok>/webhook/vapi`.
 
 ## Incident: High Webhook Error Rate
 
@@ -27,6 +44,7 @@ Operational checks for:
 2. Verify `X-Vapi-Secret` is configured correctly if secret validation is enabled.
 3. Check whether events are non-terminal (`status` returns `ignored`).
 4. Confirm call IDs in payload match `Lead.call_id` values.
+5. Check preflight mode: if assistant server requirement is disabled and no webhook URL is configured, terminal updates are expected to be missing.
 
 ## Incident: Duplicate Webhook Events
 
