@@ -1,4 +1,6 @@
 $ErrorActionPreference = 'SilentlyContinue'
+$root = Split-Path -Parent $PSScriptRoot
+$pidFile = Join-Path $root ".demo-processes.json"
 
 $targets = @(
     @{ Name = 'uvicorn'; Pattern = 'uvicorn*app.main:app*--port 8000' },
@@ -8,6 +10,25 @@ $targets = @(
 
 $ports = @(8000, 5173)
 $killed = @()
+
+if (Test-Path $pidFile) {
+    try {
+        $tracked = Get-Content $pidFile -Raw | ConvertFrom-Json
+        foreach ($pid in @($tracked.backendPid, $tracked.frontendPid)) {
+            if ($pid) {
+                $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                if ($proc) {
+                    Stop-Process -Id $pid -Force
+                    $killed += [PSCustomObject]@{ Id = $pid; Type = 'tracked' }
+                }
+            }
+        }
+    }
+    catch {
+    }
+
+    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+}
 
 foreach ($target in $targets) {
     $pattern = $target.Pattern

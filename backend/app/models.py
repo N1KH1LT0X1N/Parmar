@@ -30,6 +30,35 @@ TERMINAL_STATUSES = {
     LEAD_STATUS_DNC,
 }
 
+ACTIVE_LEAD_STATUSES = {
+    LEAD_STATUS_PENDING,
+    LEAD_STATUS_QUEUED,
+    LEAD_STATUS_CALLING,
+}
+
+# ---------- Lead outcome constants ----------
+CONTACT_OUTCOME_QUALIFIED = "qualified"
+CONTACT_OUTCOME_NOT_INTERESTED = "not_interested"
+CONTACT_OUTCOME_WRONG_NUMBER = "wrong_number"
+CONTACT_OUTCOME_DNC_REQUESTED = "dnc_requested"
+CONTACT_OUTCOME_CALLBACK_REQUESTED = "callback_requested"
+CONTACT_OUTCOME_VOICEMAIL = "voicemail"
+CONTACT_OUTCOME_NO_ANSWER = "no_answer"
+CONTACT_OUTCOME_CALL_FAILED = "call_failed"
+CONTACT_OUTCOME_UNKNOWN = "unknown"
+
+ALL_CONTACT_OUTCOMES = {
+    CONTACT_OUTCOME_QUALIFIED,
+    CONTACT_OUTCOME_NOT_INTERESTED,
+    CONTACT_OUTCOME_WRONG_NUMBER,
+    CONTACT_OUTCOME_DNC_REQUESTED,
+    CONTACT_OUTCOME_CALLBACK_REQUESTED,
+    CONTACT_OUTCOME_VOICEMAIL,
+    CONTACT_OUTCOME_NO_ANSWER,
+    CONTACT_OUTCOME_CALL_FAILED,
+    CONTACT_OUTCOME_UNKNOWN,
+}
+
 # ---------- Campaign job constants ----------
 JOB_STATUS_QUEUED = "queued"
 JOB_STATUS_PROCESSING = "processing"
@@ -55,6 +84,7 @@ class Lead(SQLModel, table=True):
 
     status: str = Field(default=LEAD_STATUS_PENDING, index=True)
     interest_level: Optional[str] = Field(default=None, max_length=20)
+    contact_outcome: Optional[str] = Field(default=None, index=True, max_length=40)
     summary: Optional[str] = Field(default=None, max_length=MAX_SUMMARY_LENGTH)
     call_id: Optional[str] = Field(default=None, index=True, max_length=80, unique=True)
 

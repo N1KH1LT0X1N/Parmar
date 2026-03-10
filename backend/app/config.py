@@ -48,6 +48,11 @@ class Settings(BaseSettings):
 
     dashboard_api_key: str = ""
     dashboard_api_key_header: str = "X-API-Key"
+    dashboard_session_secret: str = ""
+    dashboard_session_cookie_name: str = "parmar_dashboard_session"
+    dashboard_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
+    dashboard_session_secure: bool = False
+    dashboard_session_same_site: Literal["lax", "strict", "none"] = "lax"
 
     max_concurrent_calls: int = Field(default=1, ge=1, le=10)
     max_call_attempts: int = Field(default=3, ge=1, le=10)
@@ -70,6 +75,7 @@ class Settings(BaseSettings):
     security_headers_enabled: bool = True
     cors_allowed_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
     log_pii_redaction_enabled: bool = True
+    trust_proxy_headers: bool = False
 
     def startup_validation_errors(self) -> list[str]:
         errors: list[str] = []
@@ -98,6 +104,12 @@ class Settings(BaseSettings):
 
     def parsed_cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    def dashboard_auth_enabled(self) -> bool:
+        return bool(self.dashboard_api_key)
+
+    def dashboard_session_signing_secret(self) -> str:
+        return self.dashboard_session_secret or self.dashboard_api_key
 
 
 @lru_cache(maxsize=1)

@@ -1,31 +1,38 @@
 import os
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 
-@pytest.fixture(scope="session")
-def app(tmp_path_factory):
-    db_file = tmp_path_factory.mktemp("db") / "test.db"
-
-    os.environ["DATABASE_URL"] = f"sqlite:///{db_file.as_posix()}"
-    os.environ["VAPI_API_KEY"] = "test-key"
-    os.environ["VAPI_ASSISTANT_ID"] = "assistant-id"
-    os.environ["VAPI_PHONE_NUMBER_ID"] = "phone-number-id"
-    os.environ["VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN"] = "false"
-    os.environ["TWILIO_FROM_NUMBER"] = "whatsapp:+14155238886"
-    os.environ["MANAGER_PHONE_NUMBER"] = "whatsapp:+919999999999"
-    os.environ["MANAGER_JOIN_CODE"] = "join demo-room"
-    os.environ["MAX_CONCURRENT_CALLS"] = "1"
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    repo_root = Path(__file__).resolve().parents[2]
+    db_file = tmp_path / "test.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("VAPI_API_KEY", "test-key")
+    monkeypatch.setenv("VAPI_ASSISTANT_ID", "assistant-id")
+    monkeypatch.setenv("VAPI_PHONE_NUMBER_ID", "phone-number-id")
+    monkeypatch.setenv("VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN", "false")
+    monkeypatch.setenv("TWILIO_FROM_NUMBER", "whatsapp:+14155238886")
+    monkeypatch.setenv("MANAGER_PHONE_NUMBER", "whatsapp:+919999999999")
+    monkeypatch.setenv("MANAGER_JOIN_CODE", "join demo-room")
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
 
     from app.config import get_settings
     from app.database import get_engine
 
     get_settings.cache_clear()
     get_engine.cache_clear()
+
+    alembic_config = Config(str(repo_root / "backend" / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(repo_root / "backend" / "alembic"))
+    command.upgrade(alembic_config, "head")
 
     from app.main import create_app
 

@@ -38,10 +38,74 @@ body {
   flex-wrap: wrap;
 }
 
+.header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .manager-card {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.auth-card {
+  max-width: 420px;
+  margin: 16px auto;
+}
+
+.auth-form {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-form input,
+.filter-grid input,
+.filter-grid select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.auth-form input:focus-visible,
+.filter-grid input:focus-visible,
+.filter-grid select:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
+.filter-card {
+  margin-bottom: 16px;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.filter-grid label {
+  display: block;
+  font-size: 13px;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.checkbox-row {
+  display: flex !important;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 0 !important;
+}
+
+.checkbox-row input {
+  width: auto;
+  margin: 0;
 }
 
 .notice-card {
@@ -138,6 +202,8 @@ button:focus-visible {
 }
 button.primary { background: #2563eb; color: white; }
 button.secondary { background: #e5e7eb; color: #111827; }
+button.danger { background: #dc2626; color: white; }
+button.danger:hover:not(:disabled) { background: #b91c1c; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button.action-btn {
   background: #f97316;
@@ -149,6 +215,17 @@ button.action-btn {
   font-weight: 600;
 }
 button.action-btn:hover:not(:disabled) { background: #ea580c; }
+
+button.action-secondary {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.action-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
 /* ---------- Table ---------- */
 .table-wrap { overflow: auto; }
@@ -187,6 +264,14 @@ tr:hover td {
 .summary-cell {
   max-width: 300px;
   word-break: break-word;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
 }
 
 /* ---------- Utilities ---------- */

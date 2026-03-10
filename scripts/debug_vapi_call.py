@@ -1,14 +1,23 @@
 import json
 import os
+import sys
+from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
 
-load_dotenv()
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.append(str(BACKEND_DIR))
+
+from app.config import get_settings  # noqa: E402
+
+
+settings = get_settings()
 
 payload = {
-    "assistantId": os.getenv("VAPI_ASSISTANT_ID", ""),
-    "phoneNumberId": os.getenv("VAPI_PHONE_NUMBER_ID", ""),
+    "assistantId": settings.vapi_assistant_id,
+    "phoneNumberId": settings.vapi_phone_number_id,
     "customer": {
         "number": "+919867477169",
         "name": "Nikhil Pise",
@@ -24,16 +33,16 @@ payload = {
 }
 
 headers = {
-    "Authorization": f"Bearer {os.getenv('VAPI_API_KEY', '')}",
+    "Authorization": f"Bearer {settings.vapi_api_key}",
     "Content-Type": "application/json",
 }
 
-url = os.getenv("VAPI_API_URL", "https://api.vapi.ai/call")
+url = settings.vapi_api_url
 
 print("URL:", url)
 print("assistantId set:", bool(payload["assistantId"]))
 print("phoneNumberId set:", bool(payload["phoneNumberId"]))
-print("api key set:", bool(os.getenv("VAPI_API_KEY")))
+print("api key set:", bool(settings.vapi_api_key))
 
 with httpx.Client(timeout=30) as client:
     response = client.post(url, json=payload, headers=headers)

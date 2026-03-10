@@ -8,6 +8,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $pythonExe = Join-Path $root ".venv\Scripts\python.exe"
 $alembicExe = Join-Path $root ".venv\Scripts\alembic.exe"
 $frontendDir = Join-Path $root "frontend"
+$pidFile = Join-Path $root ".demo-processes.json"
 
 if (-not (Test-Path $pythonExe)) {
     Write-Error "Python executable not found at $pythonExe"
@@ -51,7 +52,7 @@ $backendCmd = "Set-Location '$root'; `$env:ENV_VALIDATION_MODE='$ValidationMode'
 $frontendCmd = "Set-Location '$frontendDir'; npm run dev"
 
 Write-Host "Starting backend on http://127.0.0.1:8000 (ENV_VALIDATION_MODE=$ValidationMode)"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd | Out-Null
+$backendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd -PassThru
 
 Write-Host "Waiting for backend health..."
 $healthy = $false
@@ -74,6 +75,31 @@ if (-not $healthy) {
 }
 
 Write-Host "Starting frontend on http://127.0.0.1:5173"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd | Out-Null
+$frontendProcess = Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd -PassThru
+
+Write-Host "Waiting for frontend readiness..."
+$frontendReady = $false
+for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Seconds 1
+    try {
+        $res = Invoke-WebRequest -Uri "http://127.0.0.1:5173" -UseBasicParsing -TimeoutSec 2
+        if ($res.StatusCode -ge 200 -and $res.StatusCode -lt 500) {
+            $frontendReady = $true
+            break
+        }
+    }
+    catch {
+    }
+}
+
+if (-not $frontendReady) {
+    Write-Warning "Frontend did not become reachable at http://127.0.0.1:5173 within 30s"
+}
+
+@{
+    backendPid = $backendProcess.Id
+    frontendPid = $frontendProcess.Id
+    updatedAt = (Get-Date).ToString("o")
+} | ConvertTo-Json | Set-Content -Path $pidFile -Encoding UTF8
 
 Write-Host "Demo services launched in new terminals."

@@ -1,6 +1,7 @@
 # Backend (Parmar AI Calling Agent)
 
 FastAPI backend for:
+
 - lead uploads and campaign orchestration
 - outbound call initiation via Vapi
 - webhook processing (Vapi + Twilio)
@@ -9,16 +10,20 @@ FastAPI backend for:
 ## Setup
 
 1. Install dependencies:
+
 - `python -m pip install -r requirements.txt`
 
-2. Configure environment:
+1. Configure environment:
+
 - Use repo-root `.env` (see `.env.example`)
 - Backend settings read only repo-root `.env` (not `backend/.env`) to avoid environment drift
 
-3. Run migrations:
+1. Run migrations:
+
 - `alembic -c alembic.ini upgrade head`
 
-4. Start API:
+1. Start API:
+
 - `python -m uvicorn app.main:app --reload`
 
 ## Important Environment Flags
@@ -35,6 +40,7 @@ FastAPI backend for:
 - `ENABLE_TEST_ENDPOINTS=true`: enables `/test/*` routes (disabled by default)
 
 Reliability tuning:
+
 - `MAX_CONCURRENT_CALLS`, `MAX_CALL_ATTEMPTS`, `JOB_POLL_INTERVAL_SECONDS`, `JOB_LEASE_SECONDS`
 - `VAPI_MAX_RETRIES`, `VAPI_CIRCUIT_*`
 - `TWILIO_MAX_RETRIES`, `TWILIO_CIRCUIT_*`
@@ -43,6 +49,7 @@ Reliability tuning:
 ## Endpoints
 
 Core:
+
 - `GET /health`
 - `GET /ready`
 - `POST /upload`
@@ -53,12 +60,15 @@ Core:
 - `POST /leads/{lead_id}/do-not-contact`
 
 Webhooks:
+
 - `POST /webhook/vapi`
 - `POST /webhook/twilio-status`
 
 Optional test-only (requires `ENABLE_TEST_ENDPOINTS=true`):
+
 - `POST /test/mark-call-completed/{call_id}`
 - `POST /test/lead/{lead_id}/simulate-completion`
 
 ## Testing
+
 - `python -m pytest tests -q`

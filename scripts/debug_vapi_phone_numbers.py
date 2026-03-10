@@ -1,13 +1,21 @@
 import json
-import os
+import sys
+from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
 
-load_dotenv()
-key = os.getenv("VAPI_API_KEY", "")
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.append(str(BACKEND_DIR))
+
+from app.config import get_settings  # noqa: E402
+
+
+settings = get_settings()
+key = settings.vapi_api_key
 headers = {"Authorization": f"Bearer {key}"}
-base = "https://api.vapi.ai"
+base = settings.vapi_base_url.rstrip("/")
 
 for path in ["/phone-number", "/phone-numbers", "/phoneNumber", "/phoneNumbers"]:
     url = base + path

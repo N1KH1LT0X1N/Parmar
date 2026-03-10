@@ -1,11 +1,21 @@
 import asyncio
+from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.database import get_engine
-from app.main import process_single_lead
-from app.models import Lead
+from app.main import CampaignQueue, process_single_lead
+from app.models import CampaignJob, Lead
+
+
+def _upgrade_test_database() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    alembic_config = Config(str(repo_root / "backend" / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(repo_root / "backend" / "alembic"))
+    command.upgrade(alembic_config, "head")
 
 
 # ---------- Health ----------
@@ -51,9 +61,12 @@ def test_upload_and_list_leads(client):
 
     leads_response = client.get("/leads")
     assert leads_response.status_code == 200
-    leads = leads_response.json()
-    assert len(leads) >= 1
+    leads_payload = leads_response.json()
+    leads = leads_payload["items"]
+    assert len(leads) == 1
     assert leads[-1]["name"] == "Amit"
+    assert leads_payload["total"] == 1
+    assert leads_payload["stats"]["pending"] == 1
 
 
 def test_upload_rejects_invalid_csv_columns(client):
@@ -102,7 +115,7 @@ def test_upload_normalizes_indian_phone_format(client):
     assert response.status_code == 200
 
     leads_response = client.get("/leads")
-    leads = leads_response.json()
+    leads = leads_response.json()["items"]
     assert any(lead["phone"] == "+919867477169" for lead in leads)
 
 
@@ -158,13 +171,50 @@ def test_dashboard_auth_enforced_when_key_set(monkeypatch):
     monkeypatch.setenv("DASHBOARD_API_KEY", "super-secret")
     get_settings.cache_clear()
     get_engine.cache_clear()
+    _upgrade_test_database()
 
     with TestClient(create_app()) as local_client:
         unauthorized = local_client.get("/leads")
         assert unauthorized.status_code == 401
 
+        login = local_client.post("/auth/dashboard/login", json={"password": "super-secret"})
+        assert login.status_code == 200
+        assert login.json()["authenticated"] is True
+
+        session_authorized = local_client.get("/leads")
+        assert session_authorized.status_code == 200
+
         authorized = local_client.get("/leads", headers={"X-API-Key": "super-secret"})
         assert authorized.status_code == 200
+
+        logout = local_client.post("/auth/dashboard/logout")
+        assert logout.status_code == 200
+        assert local_client.get("/leads").status_code == 401
+
+    monkeypatch.delenv("DASHBOARD_API_KEY", raising=False)
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+
+
+def test_dashboard_auth_status_reports_cookie_session(monkeypatch):
+    from app.config import get_settings
+    from app.database import get_engine
+    from app.main import create_app
+
+    monkeypatch.setenv("DASHBOARD_API_KEY", "super-secret")
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+    _upgrade_test_database()
+
+    with TestClient(create_app()) as local_client:
+        status_before = local_client.get("/auth/dashboard/status")
+        assert status_before.status_code == 200
+        assert status_before.json() == {"authenticated": False, "auth_required": True}
+
+        local_client.post("/auth/dashboard/login", json={"password": "super-secret"})
+        status_after = local_client.get("/auth/dashboard/status")
+        assert status_after.status_code == 200
+        assert status_after.json() == {"authenticated": True, "auth_required": True}
 
     monkeypatch.delenv("DASHBOARD_API_KEY", raising=False)
     get_settings.cache_clear()
@@ -197,6 +247,29 @@ def test_start_campaign_no_pending_leads(client):
     assert data["queued"] == 0
 
 
+def test_campaign_queue_claims_sqlite_jobs(db_session):
+    lead = Lead(name="Queue Claim", phone="+919811111188", status="pending")
+    db_session.add(lead)
+    db_session.commit()
+    db_session.refresh(lead)
+
+    from app.config import get_settings
+
+    assert lead.id is not None
+    queue = CampaignQueue(get_settings())
+    created = asyncio.run(queue.enqueue_many([lead.id]))
+    assert created == 1
+
+    claimed_job_id = asyncio.run(queue._claim_next_job())
+    assert claimed_job_id is not None
+
+    with Session(get_engine()) as session:
+        job = session.get(CampaignJob, claimed_job_id)
+        assert job is not None
+        assert job.status == "processing"
+        assert job.attempt_count == 1
+
+
 def test_diagnostics_vapi_preflight_endpoint(client, monkeypatch):
     async def fake_preflight(self):
         return {
@@ -224,6 +297,7 @@ def test_start_campaign_fails_when_preflight_fails(monkeypatch, db_session):
     monkeypatch.setenv("VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN", "true")
     get_settings.cache_clear()
     get_engine.cache_clear()
+    _upgrade_test_database()
 
     lead = Lead(name="Preflight Lead", phone="+919811111199", status="pending")
     db_session.add(lead)
@@ -287,6 +361,51 @@ def test_mark_do_not_contact_endpoint(client, db_session):
     assert refreshed.dnc_reason == "requested opt out"
 
 
+def test_delete_completed_lead_endpoint(client, db_session):
+    lead = Lead(name="Delete Me", phone="+919700000099", status="completed", summary="done")
+    db_session.add(lead)
+    db_session.commit()
+    db_session.refresh(lead)
+    lead_id = lead.id
+
+    response = client.delete(f"/leads/{lead_id}")
+    assert response.status_code == 200
+    assert response.json()["message"] == "Deleted lead Delete Me"
+
+    db_session.expire_all()
+    deleted = db_session.exec(select(Lead).where(Lead.id == lead_id)).first()
+    assert deleted is None
+
+
+def test_delete_lead_rejects_active_status(client, db_session):
+    lead = Lead(name="Still Calling", phone="+919700000100", status="calling", call_id="call-active")
+    db_session.add(lead)
+    db_session.commit()
+    db_session.refresh(lead)
+
+    response = client.delete(f"/leads/{lead.id}")
+    assert response.status_code == 409
+    assert "can be deleted" in response.json()["detail"]
+
+
+def test_upload_allows_same_phone_after_completed_lead_deleted(client, db_session):
+    lead = Lead(name="Old Trial", phone="+919700000101", status="completed")
+    db_session.add(lead)
+    db_session.commit()
+    db_session.refresh(lead)
+
+    delete_response = client.delete(f"/leads/{lead.id}")
+    assert delete_response.status_code == 200
+
+    csv_content = "Name,Phone\nRetry Lead,+919700000101\n"
+    upload_response = client.post(
+        "/upload",
+        files={"file": ("retry.csv", csv_content, "text/csv")},
+    )
+    assert upload_response.status_code == 200
+    assert upload_response.json()["created"] == 1
+
+
 # ---------- Process lead ----------
 
 def test_process_single_lead_marks_calling(db_session, monkeypatch):
@@ -333,6 +452,7 @@ def test_process_single_lead_marks_failed_with_reason(db_session, monkeypatch):
         refreshed = session.exec(select(Lead).where(Lead.id == lead.id)).first()
         assert refreshed is not None
         assert refreshed.status == "failed"
+        assert refreshed.contact_outcome == "call_failed"
         assert refreshed.summary is not None
         assert "provider unavailable" in refreshed.summary
 
@@ -380,6 +500,7 @@ def test_webhook_updates_lead_and_triggers_hot_notification(client, db_session, 
     assert refreshed is not None
     assert refreshed.status == "completed"
     assert refreshed.interest_level == "high"
+    assert refreshed.contact_outcome == "qualified"
     assert refreshed.updated_at is not None
     assert sent["count"] == 1
 
@@ -439,6 +560,7 @@ def test_webhook_voicemail_status(client, db_session, monkeypatch):
     refreshed = db_session.exec(select(Lead).where(Lead.call_id == "call-vm")).first()
     assert refreshed is not None
     assert refreshed.status == "voicemail"
+    assert refreshed.contact_outcome == "voicemail"
 
 
 def test_webhook_marks_do_not_contact_signal(client, db_session, monkeypatch):
@@ -466,6 +588,67 @@ def test_webhook_marks_do_not_contact_signal(client, db_session, monkeypatch):
     assert refreshed is not None
     assert refreshed.status == "dnc"
     assert refreshed.do_not_contact is True
+    assert refreshed.contact_outcome == "dnc_requested"
+
+
+def test_webhook_not_interested_does_not_force_dnc(client, db_session, monkeypatch):
+    lead = Lead(name="Not Interested", phone="+919811223300", status="calling", call_id="call-ni")
+    db_session.add(lead)
+    db_session.commit()
+
+    monkeypatch.setattr("app.services.twilio_service.TwilioService.send_hot_lead_summary", lambda *a, **kw: None)
+
+    payload = {
+        "message": {
+            "type": "end-of-call-report",
+            "endedReason": "hangup",
+            "call": {"id": "call-ni"},
+            "analysis": {"summary": "Customer is not interested right now"},
+            "artifact": {"transcript": "Customer is not interested right now"},
+        }
+    }
+
+    response = client.post("/webhook/vapi", json=payload)
+    assert response.status_code == 200
+
+    refreshed = db_session.exec(select(Lead).where(Lead.call_id == "call-ni")).first()
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.contact_outcome == "not_interested"
+    assert refreshed.do_not_contact is False
+
+
+def test_webhook_uses_structured_interest_and_outcome(client, db_session, monkeypatch):
+    lead = Lead(name="Structured", phone="+919811223301", status="calling", call_id="call-structured")
+    db_session.add(lead)
+    db_session.commit()
+
+    monkeypatch.setattr("app.services.twilio_service.TwilioService.send_hot_lead_summary", lambda *a, **kw: None)
+
+    payload = {
+        "message": {
+            "type": "end-of-call-report",
+            "endedReason": "hangup",
+            "call": {"id": "call-structured"},
+            "analysis": {
+                "summary": "Very brief summary",
+                "structuredData": {
+                    "interest_level": "hot",
+                    "contact_outcome": "qualified",
+                },
+            },
+            "artifact": {"transcript": "brief"},
+        }
+    }
+
+    response = client.post("/webhook/vapi", json=payload)
+    assert response.status_code == 200
+
+    refreshed = db_session.exec(select(Lead).where(Lead.call_id == "call-structured")).first()
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.interest_level == "high"
+    assert refreshed.contact_outcome == "qualified"
 
 
 def test_webhook_duplicate_is_idempotent(client, db_session, monkeypatch):
@@ -543,6 +726,7 @@ def test_webhook_rejects_invalid_vapi_secret_when_enabled(monkeypatch):
     monkeypatch.setenv("VAPI_WEBHOOK_SECRET", "expected-secret")
     get_settings.cache_clear()
     get_engine.cache_clear()
+    _upgrade_test_database()
 
     payload = {
         "message": {
@@ -588,6 +772,7 @@ def test_twilio_status_callback_rejects_missing_signature_when_enabled(monkeypat
     monkeypatch.setenv("TWILIO_VALIDATE_SIGNATURE", "true")
     get_settings.cache_clear()
     get_engine.cache_clear()
+    _upgrade_test_database()
 
     with TestClient(create_app()) as local_client:
         response = local_client.post(

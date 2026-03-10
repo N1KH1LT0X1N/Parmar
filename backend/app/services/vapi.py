@@ -62,46 +62,63 @@ class VapiService:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=self.settings.vapi_preflight_timeout_seconds) as client:
-            assistant_url = f"{self.settings.vapi_assistant_api_base_url.rstrip('/')}/{self.settings.vapi_assistant_id}"
-            assistant_response = await client.get(assistant_url, headers=headers)
-            if assistant_response.status_code >= 400:
-                errors.append(
-                    f"assistant_lookup_failed: status={assistant_response.status_code} body={assistant_response.text[:300]}"
-                )
-            else:
-                assistant_payload = assistant_response.json()
-                assistant_name = str(assistant_payload.get("name", "")).strip() if isinstance(assistant_payload, Mapping) else ""
-                details["assistant_name"] = assistant_name
-
-                server_config = assistant_payload.get("server") if isinstance(assistant_payload, Mapping) else None
-                details["assistant_has_server"] = bool(server_config)
-                if self.settings.vapi_require_assistant_server_config and not server_config:
-                    errors.append("assistant_server_missing: assistant has no server URL configured for webhooks")
-                if isinstance(server_config, Mapping):
-                    server_url = str(server_config.get("url", "")).strip()
-                    details["assistant_server_url"] = server_url
-                    expected_server_url = self.settings.vapi_expected_server_url.strip()
-                    if expected_server_url and server_url != expected_server_url:
-                        errors.append(
-                            f"assistant_server_url_mismatch: expected={expected_server_url} actual={server_url or '<empty>'}"
-                        )
-
-            phone_number_url = f"{self._api_base_url()}/phone-number"
-            phone_response = await client.get(phone_number_url, headers=headers)
-            if phone_response.status_code >= 400:
-                errors.append(
-                    f"phone_number_lookup_failed: status={phone_response.status_code} body={phone_response.text[:300]}"
-                )
-            else:
-                phone_payload = phone_response.json()
-                phone_items = phone_payload if isinstance(phone_payload, list) else []
-                known_ids = {str(item.get("id", "")).strip() for item in phone_items if isinstance(item, Mapping)}
-                details["available_phone_number_ids"] = sorted(id_value for id_value in known_ids if id_value)
-                if self.settings.vapi_phone_number_id not in known_ids:
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.vapi_preflight_timeout_seconds) as client:
+                assistant_url = f"{self.settings.vapi_assistant_api_base_url.rstrip('/')}/{self.settings.vapi_assistant_id}"
+                assistant_response = await client.get(assistant_url, headers=headers)
+                if assistant_response.status_code >= 400:
                     errors.append(
-                        f"phone_number_missing: {self.settings.vapi_phone_number_id} not found in Vapi account"
+                        f"assistant_lookup_failed: status={assistant_response.status_code} body={assistant_response.text[:300]}"
                     )
+                else:
+                    try:
+                        assistant_payload = assistant_response.json()
+                    except ValueError:
+                        errors.append("assistant_lookup_failed: invalid_json_response")
+                        assistant_payload = {}
+
+                    assistant_name = str(assistant_payload.get("name", "")).strip() if isinstance(assistant_payload, Mapping) else ""
+                    details["assistant_name"] = assistant_name
+
+                    server_config = assistant_payload.get("server") if isinstance(assistant_payload, Mapping) else None
+                    details["assistant_has_server"] = bool(server_config)
+                    if self.settings.vapi_require_assistant_server_config and not server_config:
+                        errors.append("assistant_server_missing: assistant has no server URL configured for webhooks")
+                    if isinstance(server_config, Mapping):
+                        server_url = str(server_config.get("url", "")).strip()
+                        details["assistant_server_url"] = server_url
+                        expected_server_url = self.settings.vapi_expected_server_url.strip()
+                        if expected_server_url and server_url != expected_server_url:
+                            errors.append(
+                                f"assistant_server_url_mismatch: expected={expected_server_url} actual={server_url or '<empty>'}"
+                            )
+
+                phone_number_url = f"{self._api_base_url()}/phone-number"
+                phone_response = await client.get(phone_number_url, headers=headers)
+                if phone_response.status_code >= 400:
+                    errors.append(
+                        f"phone_number_lookup_failed: status={phone_response.status_code} body={phone_response.text[:300]}"
+                    )
+                else:
+                    try:
+                        phone_payload = phone_response.json()
+                    except ValueError:
+                        errors.append("phone_number_lookup_failed: invalid_json_response")
+                        phone_payload = []
+
+                    phone_items = phone_payload if isinstance(phone_payload, list) else []
+                    known_ids = {str(item.get("id", "")).strip() for item in phone_items if isinstance(item, Mapping)}
+                    details["available_phone_number_ids"] = sorted(id_value for id_value in known_ids if id_value)
+                    if self.settings.vapi_phone_number_id not in known_ids:
+                        errors.append(
+                            f"phone_number_missing: {self.settings.vapi_phone_number_id} not found in Vapi account"
+                        )
+        except httpx.TimeoutException as exc:
+            errors.append(f"preflight_timeout: {type(exc).__name__}")
+        except httpx.HTTPError as exc:
+            errors.append(f"preflight_http_error: {type(exc).__name__}: {str(exc)}")
+        except Exception as exc:
+            errors.append(f"preflight_unexpected_error: {type(exc).__name__}: {str(exc)}")
 
         if not details.get("available_phone_number_ids"):
             warnings.append("No phone numbers listed for current Vapi API key")

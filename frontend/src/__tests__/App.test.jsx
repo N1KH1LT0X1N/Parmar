@@ -1,33 +1,97 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('axios', () => {
-  return {
-    default: {
-      get: vi.fn(),
-      post: vi.fn(),
-    },
-  }
+vi.mock('../api', () => ({
+  deleteLead: vi.fn(),
+  extractErrorMessage: vi.fn((error, fallback) => {
+    const detail = error?.response?.data?.detail
+    if (typeof detail === 'string' && detail.trim()) return detail
+    if (detail && typeof detail === 'object') {
+      const message = typeof detail.message === 'string' ? detail.message : ''
+      const errors = Array.isArray(detail.errors) ? detail.errors.filter(Boolean).join(', ') : ''
+      const warnings = Array.isArray(detail.warnings) ? detail.warnings.filter(Boolean).join(', ') : ''
+      return [message, errors, warnings].filter(Boolean).join(' — ') || fallback
+    }
+    return error?.message || fallback
+  }),
+  getDashboardAuthStatus: vi.fn(),
+  getLeads: vi.fn(),
+  getManagerStatus: vi.fn(),
+  loginDashboard: vi.fn(),
+  logoutDashboard: vi.fn(),
+  markCallCompleted: vi.fn(),
+  markLeadDoNotContact: vi.fn(),
+  startCampaign: vi.fn(),
+  uploadLeads: vi.fn(),
+}))
+
+import App from '../App'
+import {
+  deleteLead,
+  getDashboardAuthStatus,
+  getLeads,
+  getManagerStatus,
+  loginDashboard,
+  markLeadDoNotContact,
+  startCampaign,
+  uploadLeads,
+} from '../api'
+
+const buildLeadsPayload = (items) => ({
+  items,
+  total: items.length,
+  limit: 25,
+  offset: 0,
+  stats: {
+    pending: items.filter((item) => item.status === 'pending').length,
+    queued: items.filter((item) => item.status === 'queued').length,
+    calling: items.filter((item) => item.status === 'calling').length,
+    completed: items.filter((item) => item.status === 'completed').length,
+    failed: items.filter((item) => item.status === 'failed').length,
+    voicemail: items.filter((item) => item.status === 'voicemail').length,
+    dnc: items.filter((item) => item.status === 'dnc').length,
+  },
 })
 
-import axios from 'axios'
-import App from '../App'
-
-const MOCK_LEADS = [
-  { id: 1, name: 'Amit', phone: '+919876543210', status: 'completed', interest_level: 'high', location: 'Bandra', summary: 'Interested in 2BHK' },
-  { id: 2, name: 'Priya', phone: '+919988776655', status: 'pending', interest_level: null, location: null, summary: null },
-]
+const MOCK_LEADS = buildLeadsPayload([
+  {
+    id: 1,
+    name: 'Amit',
+    phone: '+919876543210',
+    status: 'completed',
+    interest_level: 'high',
+    contact_outcome: 'qualified',
+    location: 'Bandra',
+    summary: 'Interested in 2BHK',
+    do_not_contact: false,
+    call_id: 'call-1',
+  },
+  {
+    id: 2,
+    name: 'Priya',
+    phone: '+919988776655',
+    status: 'pending',
+    interest_level: null,
+    contact_outcome: null,
+    location: null,
+    summary: null,
+    do_not_contact: false,
+    call_id: null,
+  },
+])
 
 describe('App', () => {
   beforeEach(() => {
-    axios.get.mockImplementation((url) => {
-      if (url.includes('/leads')) return Promise.resolve({ data: [] })
-      if (url.includes('/manager-status')) {
-        return Promise.resolve({ data: { connected: true, join_code: 'join abc', sandbox_number: 'whatsapp:+14155238886' } })
-      }
-      return Promise.resolve({ data: {} })
-    })
-    axios.post.mockResolvedValue({ data: { message: 'ok', created: 1, skipped: 0 } })
+    getDashboardAuthStatus.mockResolvedValue({ auth_required: false, authenticated: true })
+    getLeads.mockResolvedValue(buildLeadsPayload([]))
+    getManagerStatus.mockResolvedValue({ connected: true, join_code: 'join abc', sandbox_number: 'whatsapp:+14155238886' })
+    uploadLeads.mockResolvedValue({ message: 'Uploaded 1 leads', created: 1, skipped: 0 })
+    startCampaign.mockResolvedValue({ message: 'Queued 1 calls', queued: 1 })
+    loginDashboard.mockResolvedValue({ authenticated: true, auth_required: true })
+    markLeadDoNotContact.mockResolvedValue({ status: 'ok' })
+    deleteLead.mockResolvedValue({ message: 'Deleted lead Amit' })
+    vi.spyOn(window, 'prompt').mockReturnValue('requested opt out')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
   afterEach(() => {
@@ -41,19 +105,16 @@ describe('App', () => {
       expect(screen.getByText('Parmar Properties AI Agent')).toBeInTheDocument()
     })
 
-    await waitFor(() => {
-      expect(screen.getByText(/WhatsApp:/)).toBeInTheDocument()
-    })
+    expect(screen.getByText(/WhatsApp:/)).toBeInTheDocument()
   })
 
   it('shows loading spinner initially', () => {
-    // Make API hang so initial loading stays
-    axios.get.mockImplementation(() => new Promise(() => {}))
+    getDashboardAuthStatus.mockImplementation(() => new Promise(() => {}))
     render(<App />)
     expect(screen.getByText('Loading dashboard...')).toBeInTheDocument()
   })
 
-  it('uploads file and starts campaign', async () => {
+  it('uploads file and refreshes leads', async () => {
     render(<App />)
 
     await waitFor(() => {
@@ -63,47 +124,29 @@ describe('App', () => {
     const file = new File(['Name,Phone\nAmit,+919876543210\n'], 'leads.csv', { type: 'text/csv' })
     const input = screen.getByLabelText('Upload Leads CSV')
     fireEvent.change(input, { target: { files: [file] } })
-
-    const uploadButton = screen.getByRole('button', { name: /Upload/i })
-    fireEvent.click(uploadButton)
+    fireEvent.click(screen.getByRole('button', { name: /Upload/i }))
 
     await waitFor(() => {
-      expect(axios.post).toHaveBeenCalled()
+      expect(uploadLeads).toHaveBeenCalledWith(file)
     })
-
-    const uploadCall = axios.post.mock.calls.find((args) => `${args[0]}`.includes('/upload'))
-    expect(uploadCall).toBeTruthy()
-    expect(uploadCall[1]).toBeInstanceOf(FormData)
   })
 
   it('renders lead table with all columns', async () => {
-    axios.get.mockImplementation((url) => {
-      if (url.includes('/leads')) return Promise.resolve({ data: MOCK_LEADS })
-      if (url.includes('/manager-status')) {
-        return Promise.resolve({ data: { connected: true, join_code: 'join abc', sandbox_number: 'whatsapp:+14155238886' } })
-      }
-      return Promise.resolve({ data: {} })
-    })
-
+    getLeads.mockResolvedValue(MOCK_LEADS)
     render(<App />)
 
     await waitFor(() => {
       expect(screen.getByText('Amit')).toBeInTheDocument()
     })
 
-    // Check table headers
-    expect(screen.getByText('Name')).toBeInTheDocument()
-    expect(screen.getByText('Phone')).toBeInTheDocument()
-    expect(screen.getByText('Location')).toBeInTheDocument()
-    expect(screen.getByText('Status')).toBeInTheDocument()
-    expect(screen.getByText('Interest')).toBeInTheDocument()
-    expect(screen.getByText('Summary')).toBeInTheDocument()
-
-    // Check data
-    expect(screen.getByText('Amit')).toBeInTheDocument()
-    expect(screen.getByText('Bandra')).toBeInTheDocument()
-    expect(screen.getByText('high')).toBeInTheDocument()
-    expect(screen.getByText('Interested in 2BHK')).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Name' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Phone' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Location' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Interest' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Outcome' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Summary' })).toBeInTheDocument()
+    expect(screen.getByText('qualified')).toBeInTheDocument()
   })
 
   it('shows empty state when no leads', async () => {
@@ -114,42 +157,78 @@ describe('App', () => {
     })
   })
 
-  it('shows error when backend is unreachable', async () => {
-    axios.get.mockRejectedValue(new Error('Network Error'))
-
+  it('shows auth gate and signs in when auth is required', async () => {
+    getDashboardAuthStatus.mockResolvedValue({ auth_required: true, authenticated: false })
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByText('Backend not reachable')).toBeInTheDocument()
+      expect(screen.getByText('Dashboard login required')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'super-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: /Sign in/i }))
+
+    await waitFor(() => {
+      expect(loginDashboard).toHaveBeenCalledWith('super-secret')
     })
   })
 
-  it('disables start campaign when no pending leads', async () => {
-    axios.get.mockImplementation((url) => {
-      if (url.includes('/leads')) return Promise.resolve({ data: [{ id: 1, name: 'A', phone: '+91x', status: 'completed' }] })
-      if (url.includes('/manager-status')) return Promise.resolve({ data: { connected: false, join_code: '', sandbox_number: '' } })
-      return Promise.resolve({ data: {} })
-    })
+  it('shows backend error details for failed campaign start', async () => {
+    getLeads.mockResolvedValue(buildLeadsPayload([
+      { id: 1, name: 'Pending', phone: '+919900000001', status: 'pending', interest_level: null, contact_outcome: null, location: null, summary: null, do_not_contact: false, call_id: null },
+    ]))
+    startCampaign.mockRejectedValue({ response: { data: { detail: { message: 'Vapi preflight failed', errors: ['assistant_server_missing'] } } } })
 
     render(<App />)
 
     await waitFor(() => {
-      const startButton = screen.getByRole('button', { name: /Start Campaign/i })
-      expect(startButton).toBeDisabled()
+      expect(screen.getByRole('button', { name: /Start Campaign/i })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Start Campaign/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Vapi preflight failed')
+      expect(screen.getByRole('alert')).toHaveTextContent('assistant_server_missing')
     })
   })
 
-  it('shows total leads count', async () => {
-    axios.get.mockImplementation((url) => {
-      if (url.includes('/leads')) return Promise.resolve({ data: MOCK_LEADS })
-      if (url.includes('/manager-status')) return Promise.resolve({ data: { connected: true, join_code: '', sandbox_number: '' } })
-      return Promise.resolve({ data: {} })
-    })
-
+  it('opens do-not-contact action for a lead', async () => {
+    getLeads.mockResolvedValue(MOCK_LEADS)
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByText(/Total leads: 2/)).toBeInTheDocument()
+      expect(screen.getByText('Amit')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Mark Amit as do not contact/i }))
+
+    await waitFor(() => {
+      expect(markLeadDoNotContact).toHaveBeenCalledWith(1, 'requested opt out')
+    })
+  })
+
+  it('deletes a processed lead so it can be re-uploaded', async () => {
+    getLeads.mockResolvedValue(MOCK_LEADS)
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Amit')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete Amit/i }))
+
+    await waitFor(() => {
+      expect(deleteLead).toHaveBeenCalledWith(1)
+    })
+  })
+
+  it('shows total leads count from paginated payload', async () => {
+    getLeads.mockResolvedValue(MOCK_LEADS)
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/Showing 2 of 2 leads/)).toBeInTheDocument()
     })
   })
 })

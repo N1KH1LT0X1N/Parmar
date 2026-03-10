@@ -24,6 +24,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r backend/requirements.txt
 
+      - name: Validate backend migrations
+        working-directory: backend
+        run: DATABASE_URL=sqlite:///./ci.db alembic -c alembic.ini upgrade head
+
       - name: Run backend tests
         run: python -m pytest backend/tests -q
 

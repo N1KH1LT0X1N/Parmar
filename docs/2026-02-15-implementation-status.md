@@ -5,6 +5,7 @@
 ## Skills Discovered and Used
 
 ### Discovery via `find-skills`
+
 - `wshobson/agents@fastapi-templates`
 - `wshobson/agents@python-testing-patterns`
 - `dodopayments/skills@webhook-integration`
@@ -15,6 +16,7 @@
 ## Phase 1 (Backend) — Completed
 
 ### Implemented
+
 - FastAPI backend with endpoints:
   - `POST /upload`
   - `GET /leads`
@@ -28,6 +30,7 @@
 - Lead qualification/classification service
 
 ### Key files
+
 - `backend/app/main.py`
 - `backend/app/config.py`
 - `backend/app/database.py`
@@ -37,6 +40,7 @@
 - `backend/app/services/classifier.py`
 
 ### Tests
+
 - `backend/tests/test_api.py`
 - `backend/tests/test_classifier.py`
 - `backend/tests/conftest.py`

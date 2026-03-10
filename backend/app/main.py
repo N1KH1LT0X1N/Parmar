@@ -11,8 +11,11 @@ from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from typing import Any, TypedDict
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+import phonenumbers
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from phonenumbers import NumberParseException
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 from twilio.request_validator import RequestValidator
@@ -25,9 +28,19 @@ from app.audit import (
     write_audit_event,
 )
 from app.config import Settings, get_settings
-from app.database import create_db_and_tables, get_engine, get_session
+from app.database import get_engine, get_session
 from app.models import (
+    ACTIVE_LEAD_STATUSES,
     CampaignJob,
+    CONTACT_OUTCOME_CALL_FAILED,
+    CONTACT_OUTCOME_CALLBACK_REQUESTED,
+    CONTACT_OUTCOME_DNC_REQUESTED,
+    CONTACT_OUTCOME_NOT_INTERESTED,
+    CONTACT_OUTCOME_NO_ANSWER,
+    CONTACT_OUTCOME_QUALIFIED,
+    CONTACT_OUTCOME_UNKNOWN,
+    CONTACT_OUTCOME_VOICEMAIL,
+    CONTACT_OUTCOME_WRONG_NUMBER,
     JOB_STATUS_COMPLETED,
     JOB_STATUS_FAILED,
     JOB_STATUS_PROCESSING,
@@ -45,8 +58,26 @@ from app.models import (
     MAX_SUMMARY_LENGTH,
     TERMINAL_STATUSES,
 )
-from app.schemas import CampaignResponse, ManagerStatus, UploadResponse, VapiPreflightResponse, WebhookResponse
-from app.security import InMemoryRateLimiter, enforce_rate_limit, require_dashboard_auth
+from app.schemas import (
+    APIMessage,
+    CampaignResponse,
+    DashboardAuthRequest,
+    DashboardAuthResponse,
+    LeadListResponse,
+    LeadRecord,
+    LeadStats,
+    ManagerStatus,
+    UploadResponse,
+    VapiPreflightResponse,
+    WebhookResponse,
+)
+from app.security import (
+    InMemoryRateLimiter,
+    build_dashboard_session_token,
+    enforce_rate_limit,
+    has_valid_dashboard_session,
+    require_dashboard_auth,
+)
 from app.services.classifier import classify_interest, is_hot_lead
 from app.services.twilio_service import TwilioService
 from app.services.vapi import VapiService
@@ -56,9 +87,13 @@ logger = logging.getLogger("parmar")
 _PHONE_PATTERN = re.compile(r"\+\d{8,15}")
 _E164_PATTERN = re.compile(r"^\+[1-9]\d{7,14}$")
 _DNC_HINT_PATTERN = re.compile(
-    r"(do not call|don't call|stop call|stop calling|do not contact|remove my number|wrong number)",
+    r"(do not call|don't call|stop call|stop calling|do not contact|remove my number|unsubscribe|stop contacting)",
     re.IGNORECASE,
 )
+_WRONG_NUMBER_HINT_PATTERN = re.compile(r"(wrong number|not my number|incorrect number)", re.IGNORECASE)
+_CALLBACK_HINT_PATTERN = re.compile(r"(call later|callback|call back|follow up later)", re.IGNORECASE)
+_NO_ANSWER_HINT_PATTERN = re.compile(r"(no answer|unanswered|busy)", re.IGNORECASE)
+_DELETABLE_LEAD_STATUSES = TERMINAL_STATUSES | {LEAD_STATUS_FAILED}
 
 
 class PIIRedactionFilter(logging.Filter):
@@ -106,19 +141,23 @@ def _normalize_phone(raw_phone: str) -> str | None:
     if not cleaned:
         return None
 
-    if cleaned.startswith("+"):
-        normalized = "+" + re.sub(r"\D", "", cleaned[1:])
-    else:
-        digits = re.sub(r"\D", "", cleaned)
-        if len(digits) == 10:
-            normalized = "+91" + digits
-        elif digits.startswith("91") and len(digits) == 12:
-            normalized = "+" + digits
-        elif digits.startswith("0") and len(digits) == 11:
-            normalized = "+91" + digits[1:]
-        else:
-            normalized = "+" + digits
+    digits_only = re.sub(r"\D", "", cleaned)
+    candidates = [cleaned]
+    if digits_only and digits_only != cleaned:
+        candidates.append(digits_only)
 
+    parsed = None
+    for candidate in candidates:
+        try:
+            parsed = phonenumbers.parse(candidate, "IN")
+        except NumberParseException:
+            continue
+        if phonenumbers.is_possible_number(parsed) and phonenumbers.is_valid_number(parsed):
+            break
+    else:
+        return None
+
+    normalized = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
     if not _E164_PATTERN.match(normalized):
         return None
     return normalized
@@ -183,11 +222,105 @@ def _summary_from_webhook(message: dict[str, Any]) -> str:
     return _truncate(str(summary), MAX_SUMMARY_LENGTH)
 
 
-def _is_dnc_signal(summary: str, ended_reason: str, interest_level: str | None) -> bool:
-    if interest_level == "none":
-        return True
+def _extract_structured_analysis(message: dict[str, Any]) -> dict[str, Any]:
+    analysis = message.get("analysis") if isinstance(message.get("analysis"), dict) else {}
+    candidates = [
+        analysis.get("structuredData"),
+        analysis.get("dataCollection"),
+        analysis.get("extractedData"),
+        message.get("structuredData"),
+        message.get("dataCollection"),
+    ]
+    merged: dict[str, Any] = {}
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            merged.update({str(key): value for key, value in candidate.items()})
+    return merged
+
+
+def _normalized_interest_level(structured: dict[str, Any], summary: str, ended_reason: str) -> str:
+    raw_interest = structured.get("interest_level") or structured.get("interestLevel")
+    if isinstance(raw_interest, str):
+        normalized = raw_interest.strip().lower().replace("-", "_")
+        if normalized in {"high", "medium", "low", "none"}:
+            return normalized
+        if normalized in {"hot", "qualified"}:
+            return "high"
+        if normalized in {"warm", "maybe"}:
+            return "medium"
+        if normalized in {"cold", "not_interested", "not interested"}:
+            return "none"
+    return classify_interest(summary, ended_reason)
+
+
+def _determine_contact_outcome(
+    *,
+    summary: str,
+    ended_reason: str,
+    interest_level: str,
+    structured: dict[str, Any],
+) -> str:
+    raw_outcome = structured.get("contact_outcome") or structured.get("contactOutcome") or structured.get("call_outcome")
+    if isinstance(raw_outcome, str):
+        normalized = raw_outcome.strip().lower().replace(" ", "_")
+        if normalized in {
+            CONTACT_OUTCOME_QUALIFIED,
+            CONTACT_OUTCOME_NOT_INTERESTED,
+            CONTACT_OUTCOME_WRONG_NUMBER,
+            CONTACT_OUTCOME_DNC_REQUESTED,
+            CONTACT_OUTCOME_CALLBACK_REQUESTED,
+            CONTACT_OUTCOME_VOICEMAIL,
+            CONTACT_OUTCOME_NO_ANSWER,
+            CONTACT_OUTCOME_CALL_FAILED,
+            CONTACT_OUTCOME_UNKNOWN,
+        }:
+            return normalized
+
     combined = f"{summary} {ended_reason}".lower()
-    return bool(_DNC_HINT_PATTERN.search(combined))
+    if _DNC_HINT_PATTERN.search(combined):
+        return CONTACT_OUTCOME_DNC_REQUESTED
+    if _WRONG_NUMBER_HINT_PATTERN.search(combined):
+        return CONTACT_OUTCOME_WRONG_NUMBER
+    if "voicemail" in combined:
+        return CONTACT_OUTCOME_VOICEMAIL
+    if _NO_ANSWER_HINT_PATTERN.search(combined):
+        return CONTACT_OUTCOME_NO_ANSWER
+    if _CALLBACK_HINT_PATTERN.search(combined):
+        return CONTACT_OUTCOME_CALLBACK_REQUESTED
+    if interest_level == "high":
+        return CONTACT_OUTCOME_QUALIFIED
+    if interest_level == "none":
+        return CONTACT_OUTCOME_NOT_INTERESTED
+    return CONTACT_OUTCOME_UNKNOWN
+
+
+def _status_from_contact_outcome(contact_outcome: str) -> str:
+    if contact_outcome == CONTACT_OUTCOME_DNC_REQUESTED:
+        return LEAD_STATUS_DNC
+    if contact_outcome == CONTACT_OUTCOME_VOICEMAIL:
+        return LEAD_STATUS_VOICEMAIL
+    return LEAD_STATUS_COMPLETED
+
+
+def _lead_snapshot(lead: Lead) -> Lead:
+    return Lead(
+        id=lead.id,
+        name=lead.name,
+        phone=lead.phone,
+        location=lead.location,
+        budget_range=lead.budget_range,
+        bhk_preference=lead.bhk_preference,
+        status=lead.status,
+        interest_level=lead.interest_level,
+        contact_outcome=lead.contact_outcome,
+        summary=lead.summary,
+        call_id=lead.call_id,
+        do_not_contact=lead.do_not_contact,
+        dnc_reason=lead.dnc_reason,
+        dnc_updated_at=lead.dnc_updated_at,
+        created_at=lead.created_at,
+        updated_at=lead.updated_at,
+    )
 
 
 def _extract_vapi_event_key(payload: dict[str, Any], message: dict[str, Any], call_id: str, event_type: str) -> str:
@@ -222,6 +355,7 @@ async def process_single_lead(lead_id: int, settings: Settings) -> None:
         now = _utcnow()
         if lead.do_not_contact:
             lead.status = LEAD_STATUS_DNC
+            lead.contact_outcome = CONTACT_OUTCOME_DNC_REQUESTED
             lead.updated_at = now
             session.add(lead)
             write_audit_event(
@@ -234,10 +368,13 @@ async def process_single_lead(lead_id: int, settings: Settings) -> None:
             session.commit()
             return
 
+        lead_snapshot = _lead_snapshot(lead)
+
         try:
-            call_id = await _attempt_outbound_call(lead, settings)
+            call_id = await _attempt_outbound_call(lead_snapshot, settings)
         except Exception as exc:
             lead.status = LEAD_STATUS_FAILED
+            lead.contact_outcome = CONTACT_OUTCOME_CALL_FAILED
             lead.summary = _truncate(f"Call init failed: {type(exc).__name__}: {str(exc)}", MAX_SUMMARY_LENGTH)
             lead.updated_at = now
             session.add(lead)
@@ -253,6 +390,7 @@ async def process_single_lead(lead_id: int, settings: Settings) -> None:
             return
 
         lead.status = LEAD_STATUS_CALLING
+        lead.contact_outcome = None
         lead.call_id = call_id
         lead.updated_at = now
         session.add(lead)
@@ -271,7 +409,6 @@ class CampaignQueue:
         self.settings = settings
         self._workers: list[asyncio.Task] = []
         self._running = False
-        self._claim_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._running:
@@ -344,7 +481,13 @@ class CampaignQueue:
 
     async def _worker(self, worker_id: int) -> None:
         while self._running:
-            job_id = await self._claim_next_job()
+            try:
+                job_id = await self._claim_next_job()
+            except Exception:
+                logger.exception("[worker-%d] Failed to claim next job", worker_id)
+                await asyncio.sleep(self.settings.job_poll_interval_seconds)
+                continue
+
             if job_id is None:
                 await asyncio.sleep(self.settings.job_poll_interval_seconds)
                 continue
@@ -355,28 +498,46 @@ class CampaignQueue:
                 logger.exception("[worker-%d] Unhandled error processing job %d", worker_id, job_id)
 
     async def _claim_next_job(self) -> int | None:
-        async with self._claim_lock:
-            with Session(get_engine()) as session:
-                now = _utcnow()
-                job = session.exec(
-                    select(CampaignJob)
-                    .where(
-                        CampaignJob.status == JOB_STATUS_QUEUED,
-                        CampaignJob.scheduled_at <= now,
+        with Session(get_engine()) as session:
+            now = _utcnow()
+            lease_until = now + timedelta(seconds=self.settings.job_lease_seconds)
+            result = session.exec(
+                text(
+                    """
+                    UPDATE campaignjob
+                    SET status = :processing_status,
+                        attempt_count = attempt_count + 1,
+                        started_at = COALESCE(started_at, :now),
+                        lease_until = :lease_until,
+                        updated_at = :now
+                    WHERE id = (
+                        SELECT id
+                        FROM campaignjob
+                        WHERE status = :queued_status
+                          AND scheduled_at <= :now
+                        ORDER BY id
+                        LIMIT 1
                     )
-                    .order_by(col(CampaignJob.id))
-                ).first()
-                if not job or job.id is None:
-                    return None
+                    RETURNING id
+                    """
+                ),
+                params={
+                    "processing_status": JOB_STATUS_PROCESSING,
+                    "queued_status": JOB_STATUS_QUEUED,
+                    "now": now,
+                    "lease_until": lease_until,
+                },
+            ).first()
+            if not result:
+                session.rollback()
+                return None
 
-                job.status = JOB_STATUS_PROCESSING
-                job.attempt_count += 1
-                job.started_at = job.started_at or now
-                job.lease_until = now + timedelta(seconds=self.settings.job_lease_seconds)
-                job.updated_at = now
-                session.add(job)
-                session.commit()
-                return job.id
+            session.commit()
+            if isinstance(result, tuple):
+                return int(result[0])
+            if hasattr(result, "_mapping"):
+                return int(next(iter(result._mapping.values())))
+            return int(result)
 
     async def _process_job(self, job_id: int, worker_id: int) -> None:
         with Session(get_engine()) as session:
@@ -405,6 +566,7 @@ class CampaignQueue:
 
             if lead.do_not_contact:
                 lead.status = LEAD_STATUS_DNC
+                lead.contact_outcome = CONTACT_OUTCOME_DNC_REQUESTED
                 lead.updated_at = now
 
                 job.status = JOB_STATUS_COMPLETED
@@ -424,41 +586,62 @@ class CampaignQueue:
                 session.commit()
                 return
 
-            try:
-                call_id = await _attempt_outbound_call(lead, self.settings)
-            except Exception as exc:
+            lead_snapshot = _lead_snapshot(lead)
+            lead_id = lead.id
+            attempt_count = job.attempt_count
+
+        try:
+            call_id = await _attempt_outbound_call(lead_snapshot, self.settings)
+        except Exception as exc:
+            with Session(get_engine()) as session:
+                job = session.get(CampaignJob, job_id)
+                lead = session.get(Lead, lead_id) if lead_id is not None else None
+                if not job:
+                    return
+
+                now = _utcnow()
                 job.last_error = _truncate(str(exc), MAX_ERROR_DETAIL_LENGTH)
                 job.lease_until = None
                 job.updated_at = now
 
-                if job.attempt_count < self.settings.max_call_attempts:
-                    retry_delay = min(2 ** max(job.attempt_count - 1, 0), 60)
+                if attempt_count < self.settings.max_call_attempts:
+                    retry_delay = min(2 ** max(attempt_count - 1, 0), 60)
                     job.status = JOB_STATUS_QUEUED
                     job.scheduled_at = now + timedelta(seconds=retry_delay)
                 else:
                     job.status = JOB_STATUS_FAILED
                     job.finished_at = now
-                    lead.status = LEAD_STATUS_FAILED
-                    lead.summary = _truncate(
-                        f"Call init failed: {type(exc).__name__}: {str(exc)}",
-                        MAX_SUMMARY_LENGTH,
-                    )
-                    lead.updated_at = now
-                    session.add(lead)
+                    if lead:
+                        lead.status = LEAD_STATUS_FAILED
+                        lead.contact_outcome = CONTACT_OUTCOME_CALL_FAILED
+                        lead.summary = _truncate(
+                            f"Call init failed: {type(exc).__name__}: {str(exc)}",
+                            MAX_SUMMARY_LENGTH,
+                        )
+                        lead.updated_at = now
+                        session.add(lead)
 
                 session.add(job)
                 write_audit_event(
                     session,
                     event_type="campaign_job_error",
                     source="campaign_worker",
-                    lead_id=lead.id,
-                    details={"job_id": job_id, "attempt": job.attempt_count, "error": job.last_error},
+                    lead_id=lead.id if lead else None,
+                    details={"job_id": job_id, "attempt": attempt_count, "error": job.last_error},
                 )
                 session.commit()
-                logger.error("[worker-%d] job=%d lead=%d call failed: %s", worker_id, job_id, lead.id, exc)
+            logger.error("[worker-%d] job=%d lead=%s call failed: %s", worker_id, job_id, lead_id, exc)
+            return
+
+        with Session(get_engine()) as session:
+            job = session.get(CampaignJob, job_id)
+            lead = session.get(Lead, lead_id) if lead_id is not None else None
+            if not job or not lead:
                 return
 
+            now = _utcnow()
             lead.status = LEAD_STATUS_CALLING
+            lead.contact_outcome = None
             lead.call_id = call_id
             lead.updated_at = now
 
@@ -478,7 +661,51 @@ class CampaignQueue:
                 details={"job_id": job_id, "attempt": job.attempt_count},
             )
             session.commit()
-            logger.info("[worker-%d] job=%d lead=%d now calling (call_id=%s)", worker_id, job_id, lead.id, call_id)
+        logger.info("[worker-%d] job=%d lead=%d now calling (call_id=%s)", worker_id, job_id, lead.id, call_id)
+
+
+def _lead_stats_from_rows(rows: Sequence[tuple[str, int]]) -> LeadStats:
+    counts = {status: count for status, count in rows}
+    return LeadStats(
+        pending=int(counts.get(LEAD_STATUS_PENDING, 0)),
+        queued=int(counts.get(LEAD_STATUS_QUEUED, 0)),
+        calling=int(counts.get(LEAD_STATUS_CALLING, 0)),
+        completed=int(counts.get(LEAD_STATUS_COMPLETED, 0)),
+        failed=int(counts.get(LEAD_STATUS_FAILED, 0)),
+        voicemail=int(counts.get(LEAD_STATUS_VOICEMAIL, 0)),
+        dnc=int(counts.get(LEAD_STATUS_DNC, 0)),
+    )
+
+
+def _send_hot_lead_notification_task(
+    *,
+    settings: Settings,
+    lead_id: int,
+    call_id: str,
+    lead_name: str,
+    summary: str,
+) -> None:
+    sid = None
+    try:
+        sid = TwilioService(settings).send_hot_lead_summary(lead_name, summary)
+    except Exception:
+        logger.exception("Hot lead notification failed for lead_id=%s", lead_id)
+
+    with Session(get_engine()) as session:
+        write_audit_event(
+            session,
+            event_type="hot_lead_notification_attempt",
+            source="twilio",
+            lead_id=lead_id,
+            call_id=call_id,
+            details={"success": bool(sid), "sid": sid},
+        )
+        session.commit()
+
+    if sid:
+        logger.info("Hot lead notification sent for %s (sid=%s)", lead_name, sid)
+    else:
+        logger.warning("Hot lead notification failed for %s", lead_name)
 
 
 def _configure_logging(current_settings: Settings) -> None:
@@ -519,7 +746,6 @@ def create_app() -> FastAPI:
         _configure_logging(settings)
         _validate_startup_environment(settings)
 
-        create_db_and_tables()
         with Session(get_engine()) as startup_session:
             cleanup_retention_data(startup_session, settings)
             startup_session.commit()
@@ -589,12 +815,31 @@ def create_app() -> FastAPI:
             limiter=limiter,
             bucket="dashboard",
             max_per_minute=settings.rate_limit_dashboard_per_minute,
+            trust_proxy_headers=settings.trust_proxy_headers,
         )
         await enforce_rate_limit(
             request=request,
             limiter=limiter,
             bucket=bucket,
             max_per_minute=bucket_limit,
+            trust_proxy_headers=settings.trust_proxy_headers,
+        )
+
+    def _apply_dashboard_session_cookie(response: Response) -> None:
+        response.set_cookie(
+            key=settings.dashboard_session_cookie_name,
+            value=build_dashboard_session_token(settings),
+            httponly=True,
+            secure=settings.dashboard_session_secure,
+            samesite=settings.dashboard_session_same_site,
+            max_age=settings.dashboard_session_ttl_seconds,
+        )
+
+    def _clear_dashboard_session_cookie(response: Response) -> None:
+        response.delete_cookie(
+            key=settings.dashboard_session_cookie_name,
+            secure=settings.dashboard_session_secure,
+            samesite=settings.dashboard_session_same_site,
         )
 
     async def _run_vapi_preflight_or_raise(session: Session) -> None:
@@ -658,6 +903,34 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=503, detail="not_ready") from exc
         return {"status": "ready"}
 
+    @app.get("/auth/dashboard/status", response_model=DashboardAuthResponse)
+    async def dashboard_auth_status(request: Request, current_settings: Settings = Depends(get_settings)):
+        auth_required = current_settings.dashboard_auth_enabled()
+        return DashboardAuthResponse(
+            authenticated=has_valid_dashboard_session(request, current_settings) if auth_required else True,
+            auth_required=auth_required,
+        )
+
+    @app.post("/auth/dashboard/login", response_model=DashboardAuthResponse)
+    async def dashboard_login(
+        payload: DashboardAuthRequest,
+        response: Response,
+        current_settings: Settings = Depends(get_settings),
+    ):
+        if not current_settings.dashboard_auth_enabled():
+            return DashboardAuthResponse(authenticated=True, auth_required=False)
+
+        if not secrets.compare_digest(payload.password, current_settings.dashboard_api_key):
+            raise HTTPException(status_code=401, detail="Invalid dashboard credentials")
+
+        _apply_dashboard_session_cookie(response)
+        return DashboardAuthResponse(authenticated=True, auth_required=True)
+
+    @app.post("/auth/dashboard/logout", response_model=DashboardAuthResponse)
+    async def dashboard_logout(response: Response, current_settings: Settings = Depends(get_settings)):
+        _clear_dashboard_session_cookie(response)
+        return DashboardAuthResponse(authenticated=False, auth_required=current_settings.dashboard_auth_enabled())
+
     @app.post("/upload", response_model=UploadResponse, dependencies=[Depends(require_dashboard_auth)])
     async def upload_leads(
         request: Request,
@@ -684,33 +957,44 @@ def create_app() -> FastAPI:
         if not rows:
             raise HTTPException(status_code=400, detail="No valid leads found in CSV")
 
-        existing_phones = set(session.exec(select(Lead.phone)).all())
-        created = 0
+        candidate_phones = [row["phone"] for row in rows]
+        existing_phones = set(session.exec(select(Lead.phone).where(Lead.phone.in_(candidate_phones))).all())
 
+        now = _utcnow()
+        leads_to_create: list[Lead] = []
         for row in rows:
             if row["phone"] in existing_phones:
                 skipped_invalid += 1
                 continue
-
-            lead = Lead(
-                name=row["name"],
-                phone=row["phone"],
-                location=row["location"],
-                budget_range=row["budget_range"],
-                bhk_preference=row["bhk_preference"],
-                status=LEAD_STATUS_PENDING,
-                created_at=_utcnow(),
+            existing_phones.add(row["phone"])
+            leads_to_create.append(
+                Lead(
+                    name=row["name"],
+                    phone=row["phone"],
+                    location=row["location"],
+                    budget_range=row["budget_range"],
+                    bhk_preference=row["bhk_preference"],
+                    status=LEAD_STATUS_PENDING,
+                    created_at=now,
+                )
             )
-            session.add(lead)
+
+        created = 0
+        if leads_to_create:
+            session.add_all(leads_to_create)
             try:
                 session.commit()
+                created = len(leads_to_create)
             except IntegrityError:
                 session.rollback()
-                skipped_invalid += 1
-                continue
-
-            existing_phones.add(row["phone"])
-            created += 1
+                for lead in leads_to_create:
+                    session.add(lead)
+                    try:
+                        session.commit()
+                        created += 1
+                    except IntegrityError:
+                        session.rollback()
+                        skipped_invalid += 1
 
         write_audit_event(
             session,
@@ -728,15 +1012,57 @@ def create_app() -> FastAPI:
             skipped=skipped_invalid,
         )
 
-    @app.get("/leads", dependencies=[Depends(require_dashboard_auth)])
-    async def list_leads(request: Request, session: Session = Depends(get_session)):
+    @app.get("/leads", response_model=LeadListResponse, dependencies=[Depends(require_dashboard_auth)])
+    async def list_leads(
+        request: Request,
+        session: Session = Depends(get_session),
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        search: str | None = None,
+        active_only: bool = False,
+    ):
         await _enforce_dashboard_request_limits(
             request=request,
             bucket="dashboard-leads",
             bucket_limit=settings.rate_limit_dashboard_per_minute,
         )
-        statement = select(Lead).order_by(col(Lead.id))
-        return session.exec(statement).all()
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+
+        filters: list[Any] = []
+        if status:
+            filters.append(Lead.status == status.strip().lower())
+        if active_only:
+            filters.append(Lead.status.in_(tuple(ACTIVE_LEAD_STATUSES)))
+        if search and search.strip():
+            term = search.strip()
+            filters.append(
+                or_(
+                    Lead.name.contains(term),
+                    Lead.phone.contains(term),
+                    Lead.location.contains(term),
+                )
+            )
+
+        statement = select(Lead)
+        total_statement = select(func.count()).select_from(Lead)
+        stats_statement = select(Lead.status, func.count()).group_by(Lead.status)
+        for condition in filters:
+            statement = statement.where(condition)
+            total_statement = total_statement.where(condition)
+            stats_statement = stats_statement.where(condition)
+
+        items = session.exec(statement.order_by(col(Lead.id)).offset(offset).limit(limit)).all()
+        total = int(session.exec(total_statement).one())
+        stats_rows = session.exec(stats_statement).all()
+        return LeadListResponse(
+            items=[LeadRecord.model_validate(item) for item in items],
+            total=total,
+            limit=limit,
+            offset=offset,
+            stats=_lead_stats_from_rows(stats_rows),
+        )
 
     @app.post("/start-campaign", response_model=CampaignResponse, dependencies=[Depends(require_dashboard_auth)])
     async def start_campaign(request: Request, session: Session = Depends(get_session)):
@@ -758,6 +1084,7 @@ def create_app() -> FastAPI:
         for lead in pending:
             if lead.do_not_contact:
                 lead.status = LEAD_STATUS_DNC
+                lead.contact_outcome = CONTACT_OUTCOME_DNC_REQUESTED
                 lead.updated_at = now
                 skipped_dnc += 1
                 session.add(lead)
@@ -839,6 +1166,7 @@ def create_app() -> FastAPI:
         lead.dnc_reason = reason
         lead.dnc_updated_at = now
         lead.status = LEAD_STATUS_DNC
+        lead.contact_outcome = CONTACT_OUTCOME_DNC_REQUESTED
         lead.updated_at = now
         session.add(lead)
 
@@ -852,10 +1180,50 @@ def create_app() -> FastAPI:
         session.commit()
         return WebhookResponse(status="ok")
 
+    @app.delete("/leads/{lead_id}", response_model=APIMessage, dependencies=[Depends(require_dashboard_auth)])
+    async def delete_lead(
+        lead_id: int,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        await _enforce_dashboard_request_limits(
+            request=request,
+            bucket="dashboard-delete-lead",
+            bucket_limit=settings.rate_limit_campaign_per_minute,
+        )
+
+        lead = session.get(Lead, lead_id)
+        if not lead:
+            raise HTTPException(status_code=404, detail=f"Lead {lead_id} not found")
+
+        if lead.status not in _DELETABLE_LEAD_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail="Only completed, failed, voicemail, or do-not-contact leads can be deleted",
+            )
+
+        deleted_name = lead.name
+        deleted_phone = lead.phone
+        campaign_jobs = session.exec(select(CampaignJob).where(CampaignJob.lead_id == lead.id)).all()
+        for job in campaign_jobs:
+            session.delete(job)
+
+        session.delete(lead)
+        write_audit_event(
+            session,
+            event_type="lead_deleted",
+            source="dashboard",
+            lead_id=lead_id,
+            details={"name": deleted_name, "phone": deleted_phone, "status": lead.status},
+        )
+        session.commit()
+        return APIMessage(message=f"Deleted lead {deleted_name}")
+
     @app.post("/webhook/vapi", response_model=WebhookResponse)
     async def vapi_webhook(
         request: Request,
         payload: dict[str, Any],
+        background_tasks: BackgroundTasks,
         session: Session = Depends(get_session),
         current_settings: Settings = Depends(get_settings),
     ):
@@ -864,6 +1232,7 @@ def create_app() -> FastAPI:
             limiter=limiter,
             bucket="webhook-vapi",
             max_per_minute=settings.rate_limit_webhook_per_minute,
+            trust_proxy_headers=settings.trust_proxy_headers,
         )
         _validate_vapi_secret(request)
 
@@ -920,10 +1289,15 @@ def create_app() -> FastAPI:
 
         summary = _summary_from_webhook(message)
         ended_reason = str(message.get("endedReason", "") or "")
-        interest_level = classify_interest(summary, ended_reason)
-        next_status = LEAD_STATUS_VOICEMAIL if "voicemail" in ended_reason.lower() else LEAD_STATUS_COMPLETED
-        if _is_dnc_signal(summary, ended_reason, interest_level):
-            next_status = LEAD_STATUS_DNC
+        structured = _extract_structured_analysis(message)
+        interest_level = _normalized_interest_level(structured, summary, ended_reason)
+        contact_outcome = _determine_contact_outcome(
+            summary=summary,
+            ended_reason=ended_reason,
+            interest_level=interest_level,
+            structured=structured,
+        )
+        next_status = _status_from_contact_outcome(contact_outcome)
 
         already_final = lead.status in TERMINAL_STATUSES
         same_terminal_update = (
@@ -931,6 +1305,7 @@ def create_app() -> FastAPI:
             and lead.status == next_status
             and (lead.summary or "") == summary
             and (lead.interest_level or "") == (interest_level or "")
+            and (lead.contact_outcome or "") == contact_outcome
         )
         if same_terminal_update:
             mark_webhook_event_status(session, provider="vapi", event_key=event_key, status="duplicate")
@@ -940,11 +1315,12 @@ def create_app() -> FastAPI:
         now = _utcnow()
         lead.summary = summary
         lead.interest_level = interest_level
+        lead.contact_outcome = contact_outcome
         lead.status = next_status
         lead.updated_at = now
-        if next_status == LEAD_STATUS_DNC:
+        if contact_outcome == CONTACT_OUTCOME_DNC_REQUESTED:
             lead.do_not_contact = True
-            lead.dnc_reason = _truncate(f"webhook:{ended_reason or interest_level or 'dnc'}", 250)
+            lead.dnc_reason = _truncate(f"webhook:{ended_reason or contact_outcome}", 250)
             lead.dnc_updated_at = now
         session.add(lead)
 
@@ -954,7 +1330,12 @@ def create_app() -> FastAPI:
             source="vapi_webhook",
             lead_id=lead.id,
             call_id=call_id,
-            details={"status": next_status, "interest_level": interest_level, "ended_reason": ended_reason},
+            details={
+                "status": next_status,
+                "interest_level": interest_level,
+                "contact_outcome": contact_outcome,
+                "ended_reason": ended_reason,
+            },
         )
         mark_webhook_event_status(session, provider="vapi", event_key=event_key, status="processed")
         session.commit()
@@ -963,27 +1344,14 @@ def create_app() -> FastAPI:
 
         should_notify_hot_lead = (not already_final) and next_status == LEAD_STATUS_COMPLETED and is_hot_lead(interest_level, summary)
         if should_notify_hot_lead:
-            twilio_service = TwilioService(current_settings)
-            sid = None
-            try:
-                sid = twilio_service.send_hot_lead_summary(lead.name, summary)
-            except Exception:
-                logger.exception("Hot lead notification failed for lead_id=%s", lead.id)
-
-            write_audit_event(
-                session,
-                event_type="hot_lead_notification_attempt",
-                source="twilio",
+            background_tasks.add_task(
+                _send_hot_lead_notification_task,
+                settings=current_settings,
                 lead_id=lead.id,
                 call_id=call_id,
-                details={"success": bool(sid), "sid": sid},
+                lead_name=lead.name,
+                summary=summary,
             )
-            session.commit()
-
-            if sid:
-                logger.info("Hot lead notification sent for %s (sid=%s)", lead.name, sid)
-            else:
-                logger.warning("Hot lead notification failed for %s", lead.name)
 
         return WebhookResponse(status="ok")
 
@@ -994,6 +1362,7 @@ def create_app() -> FastAPI:
             limiter=limiter,
             bucket="webhook-twilio",
             max_per_minute=settings.rate_limit_webhook_per_minute,
+            trust_proxy_headers=settings.trust_proxy_headers,
         )
 
         form_data = await request.form()
@@ -1067,6 +1436,7 @@ def create_app() -> FastAPI:
             lead.status = LEAD_STATUS_COMPLETED
             lead.summary = safe_summary
             lead.interest_level = classify_interest(safe_summary)
+            lead.contact_outcome = CONTACT_OUTCOME_QUALIFIED if lead.interest_level == "high" else CONTACT_OUTCOME_UNKNOWN
             lead.updated_at = _utcnow()
             session.add(lead)
             session.commit()
@@ -1116,6 +1486,7 @@ def create_app() -> FastAPI:
             lead.status = LEAD_STATUS_COMPLETED
             lead.summary = safe_summary
             lead.interest_level = classify_interest(safe_summary)
+            lead.contact_outcome = CONTACT_OUTCOME_QUALIFIED if lead.interest_level == "high" else CONTACT_OUTCOME_UNKNOWN
             lead.updated_at = _utcnow()
             session.add(lead)
             session.commit()

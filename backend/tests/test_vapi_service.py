@@ -1,5 +1,7 @@
 import asyncio
 
+import httpx
+
 from app.config import Settings
 from app.models import Lead
 from app.services.vapi import VapiService
@@ -57,3 +59,31 @@ def test_create_outbound_call_does_not_send_webhook_url(monkeypatch):
     assert variable_values["notes"] == "Bandra"
     assert "budget_range" not in variable_values
     assert "bhk_preference" not in variable_values
+
+
+def test_preflight_check_handles_transport_errors(monkeypatch):
+    settings = Settings(
+        vapi_api_key="test-key",
+        vapi_assistant_id="assistant-id",
+        vapi_phone_number_id="phone-number-id",
+    )
+
+    class FailingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers):
+            raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr("app.services.vapi.httpx.AsyncClient", FailingAsyncClient)
+
+    result = asyncio.run(VapiService(settings).preflight_check())
+
+    assert result["ok"] is False
+    assert any("preflight_http_error" in error for error in result["errors"])

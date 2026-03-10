@@ -15,7 +15,7 @@ This final plan merges and reconciles the three source documents into one implem
 - **Voice:** ElevenLabs voice through Vapi
 - **Telephony + WhatsApp notifications:** Twilio
 - **Backend:** FastAPI + SQLite (SQLModel)
-- **Frontend:** React (Vite) + Tailwind
+- **Frontend:** React (Vite) + custom CSS
 
 ### Why this decision
 - Two source docs are already Vapi-first and contain actionable implementation details.
