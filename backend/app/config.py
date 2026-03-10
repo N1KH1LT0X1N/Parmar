@@ -10,7 +10,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=str(REPO_ROOT / ".env"), extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(REPO_ROOT / ".env"),
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     app_name: str = "Parmar Properties AI Agent API"
     database_url: str = "sqlite:///./database.db"
