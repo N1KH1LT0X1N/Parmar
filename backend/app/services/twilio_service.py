@@ -9,7 +9,7 @@ from twilio.rest import Client
 
 from app.config import Settings
 
-logger = logging.getLogger("parmar.twilio")
+logger = logging.getLogger("outbound_calling.twilio")
 
 _MAX_BODY_LENGTH = 1600  # WhatsApp message limit
 

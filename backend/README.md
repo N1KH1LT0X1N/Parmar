@@ -1,4 +1,4 @@
-# Backend (Parmar AI Calling Agent)
+# Backend — AI Outbound Calling Agent
 
 FastAPI backend for:
 

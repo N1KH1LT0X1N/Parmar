@@ -16,7 +16,7 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    app_name: str = "Parmar Properties AI Agent API"
+    app_name: str = "AI Outbound Calling Agent API"
     database_url: str = "sqlite:///./database.db"
 
     vapi_api_key: str = Field(default="", validation_alias=AliasChoices("VAPI_API_KEY", "VAPI_PRIVATE_KEY"))
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     dashboard_api_key: str = ""
     dashboard_api_key_header: str = "X-API-Key"
     dashboard_session_secret: str = ""
-    dashboard_session_cookie_name: str = "parmar_dashboard_session"
+    dashboard_session_cookie_name: str = "outbound_calling_dashboard_session"
     dashboard_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=300, le=7 * 24 * 60 * 60)
     dashboard_session_secure: bool = False
     dashboard_session_same_site: Literal["lax", "strict", "none"] = "lax"

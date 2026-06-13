@@ -23,5 +23,21 @@ demo_*.csv
 .DS_Store
 Thumbs.db
 
+# Docker
+*.sqlite3
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+*.log
+
+backend/database.db
+
+.demo-processes.json
+skills-lock.json
+
 .agents/
 skills/

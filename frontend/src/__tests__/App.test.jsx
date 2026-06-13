@@ -102,7 +102,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByText('Parmar Properties AI Agent')).toBeInTheDocument()
+      expect(screen.getByText('AI Outbound Calling Agent')).toBeInTheDocument()
     })
 
     expect(screen.getByText(/WhatsApp:/)).toBeInTheDocument()
@@ -118,7 +118,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByText('Parmar Properties AI Agent')).toBeInTheDocument()
+      expect(screen.getByText('AI Outbound Calling Agent')).toBeInTheDocument()
     })
 
     const file = new File(['Name,Phone\nAmit,+919876543210\n'], 'leads.csv', { type: 'text/csv' })

@@ -13,7 +13,7 @@ import httpx
 from app.config import Settings
 from app.models import Lead
 
-logger = logging.getLogger("parmar.vapi")
+logger = logging.getLogger("outbound_calling.vapi")
 
 
 @dataclass

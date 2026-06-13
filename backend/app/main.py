@@ -82,7 +82,7 @@ from app.services.classifier import classify_interest, is_hot_lead
 from app.services.twilio_service import TwilioService
 from app.services.vapi import VapiService
 
-logger = logging.getLogger("parmar")
+logger = logging.getLogger("outbound_calling")
 
 _PHONE_PATTERN = re.compile(r"\+\d{8,15}")
 _E164_PATTERN = re.compile(r"^\+[1-9]\d{7,14}$")

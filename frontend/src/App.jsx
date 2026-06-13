@@ -292,7 +292,7 @@ export default function App() {
       <header className="container">
         <div className="header">
           <div>
-            <h1>Parmar Properties AI Agent</h1>
+            <h1>AI Outbound Calling Agent</h1>
             <p className="muted">Upload leads, start campaign, monitor statuses live.</p>
           </div>
           <div className="header-actions">

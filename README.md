@@ -1,96 +1,152 @@
-# Parmar AI Calling Agent
+# AI Outbound Calling Agent
 
-Production-style outbound lead qualification stack:
+![CI](https://github.com/N1KH1LT0X1N/Parmar/actions/workflows/ci.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
+![Node 18+](https://img.shields.io/badge/node-18+-brightgreen.svg)
 
-- `backend/`: FastAPI + SQLModel API, durable campaign queue, webhook processing
-- `frontend/`: React + Vite dashboard
-- `docs/`: prompts and runbooks
+A production-ready open-source template for AI-powered outbound calling. Upload leads via CSV, queue campaigns, and let an AI voice agent qualify prospects via phone. Hot leads are automatically forwarded to a human manager via Twilio.
+
+Built for teams who want a batteries-included starting point with Vapi, FastAPI, React, and robust webhook handling.
+
+## Features
+
+- **CSV lead upload** — Drag-and-drop CSV import with phone normalization
+- **Durable campaign queue** — DB-backed queue with retries, job leasing, and concurrency controls
+- **AI voice qualification** — Vapi-powered outbound calls with dynamic variables
+- **Webhook processing** — Idempotent Vapi + Twilio webhook handlers
+- **Hot-lead alerts** — Automatic manager notification via Twilio when interest is high
+- **Dashboard** — React + Vite dashboard with live status polling, search, filters, and pagination
+- **Security** — Optional API-key auth, rate limits, Vapi secret validation, Twilio signature verification, PII redaction
+- **CI/CD** — GitHub Actions with tests, build, and security scanning
+
+## Architecture
+
+```
+CSV Upload  -->  Campaign Queue  -->  Vapi Outbound Call
+     |                |                       |
+     v                v                       v
+  SQLite DB      Job Processor      End-of-Call Webhook
+                                              |
+                                              v
+                                    Classifier + Manager Alert
+```
 
 ## Quick Start
 
-## 1. Prerequisites
+**Option A — Docker (recommended)**
 
-- Python 3.10+
-- Node.js 18+
-- Vapi account (assistant + phone number)
-- Twilio account (for manager notifications)
+```bash
+git clone https://github.com/N1KH1LT0X1N/Parmar.git
+cd Parmar
+cp .env.example .env
+# Fill in VAPI_API_KEY, VAPI_ASSISTANT_ID, VAPI_PHONE_NUMBER_ID,
+# TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, MANAGER_PHONE_NUMBER
+docker compose up
+```
 
-## 2. Environment
+**Option B — Local**
 
-- Copy `.env.example` to `.env`
-- Fill required keys:
-  - `VAPI_API_KEY` (or `VAPI_PRIVATE_KEY`)
-  - `VAPI_ASSISTANT_ID`
-  - `VAPI_PHONE_NUMBER_ID`
-  - `TWILIO_ACCOUNT_SID`
-  - `TWILIO_AUTH_TOKEN`
-  - `TWILIO_FROM_NUMBER`
-  - `MANAGER_PHONE_NUMBER`
+```bash
+git clone https://github.com/N1KH1LT0X1N/Parmar.git
+cd Parmar
+cp .env.example .env
+# Edit .env with your credentials
+python -m pip install -r backend/requirements.txt
+cd backend && alembic -c alembic.ini upgrade head
+cd .. && python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+# In another terminal:
+cd frontend && npm install && npm run dev
+```
 
-Security-related recommended keys:
+**Option C — PowerShell helper**
 
-- `DASHBOARD_API_KEY` (protect dashboard endpoints)
-- `VAPI_WEBHOOK_SECRET` (protect `/webhook/vapi`)
-- `TWILIO_VALIDATE_SIGNATURE=true` (verify Twilio callbacks)
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1
+```
 
-Vapi preflight controls (recommended):
+## Configuration Reference
 
-- `VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN=true` (blocks `/start-campaign` on invalid Vapi config)
-- `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG=true` for deployed/tunneled webhook workflows
-- `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG=false` for local call-init testing without webhook deployment
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `VAPI_API_KEY` | Vapi API key | — | **Yes** |
+| `VAPI_ASSISTANT_ID` | Vapi assistant ID | — | **Yes** |
+| `VAPI_PHONE_NUMBER_ID` | Vapi phone number ID | — | **Yes** |
+| `TWILIO_ACCOUNT_SID` | Twilio account SID | — | **Yes** |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token | — | **Yes** |
+| `TWILIO_FROM_NUMBER` | Twilio WhatsApp sender | `whatsapp:+14155238886` | **Yes** |
+| `MANAGER_PHONE_NUMBER` | Manager WhatsApp number | — | **Yes** |
+| `DASHBOARD_API_KEY` | Protects dashboard endpoints | — | Recommended |
+| `VAPI_WEBHOOK_SECRET` | Validates `X-Vapi-Secret` | — | Recommended |
+| `TWILIO_VALIDATE_SIGNATURE` | Verify Twilio callbacks | `false` | Recommended |
+| `VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN` | Block campaign on invalid config | `true` | No |
+| `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG` | Require assistant webhook URL | `true` | No |
+| `DATABASE_URL` | SQLite path | `sqlite:///./database.db` | No |
+| `MAX_CONCURRENT_CALLS` | Max parallel calls | `1` | No |
+| `MAX_CALL_ATTEMPTS` | Max retries per lead | `3` | No |
+| `JOB_POLL_INTERVAL_SECONDS` | Queue poll frequency | `0.5` | No |
+| `JOB_LEASE_SECONDS` | Job lock TTL | `60` | No |
+| `CORS_ALLOWED_ORIGINS` | Allowed frontend origins | `http://127.0.0.1:5173,http://localhost:5173` | No |
+| `LOG_PII_REDACTION_ENABLED` | Redact PII in logs | `true` | No |
 
-## 3. Install
+See `.env.example` for the full list.
 
-- Backend: `python -m pip install -r backend/requirements.txt`
-- Frontend: `cd frontend && npm install`
+## API Reference
 
-## 4. Database Migration
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | — | Health check |
+| `GET` | `/ready` | — | Readiness check |
+| `POST` | `/upload` | `DASHBOARD_API_KEY` | Upload leads CSV |
+| `GET` | `/leads` | `DASHBOARD_API_KEY` | List leads with filters |
+| `POST` | `/start-campaign` | `DASHBOARD_API_KEY` | Start calling pending leads |
+| `GET` | `/manager-status` | `DASHBOARD_API_KEY` | Twilio connection status |
+| `GET` | `/diagnostics/vapi-preflight` | — | Vapi config validation |
+| `POST` | `/leads/{lead_id}/do-not-contact` | `DASHBOARD_API_KEY` | Mark lead as DNC |
+| `POST` | `/webhook/vapi` | `VAPI_WEBHOOK_SECRET` | End-of-call webhook |
+| `POST` | `/webhook/twilio-status` | Signature | Twilio status callback |
 
-- Run migrations before startup:
-  - `cd backend`
-  - `alembic -c alembic.ini upgrade head`
+## Running Tests
 
-## 5. Run
+Backend:
 
-- Backend: `python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000`
-- Frontend: `cd frontend && npm run dev`
+```bash
+python -m pytest backend/tests -q
+```
 
-Or use helper script:
+Frontend:
 
-- `powershell -ExecutionPolicy Bypass -File scripts/start-demo.ps1`
+```bash
+cd frontend && npm run test && npm run build
+```
 
-## 6. Test
+## Deployment
 
-- Backend: `python -m pytest backend/tests -q`
-- Frontend: `cd frontend && npm run test && npm run build`
+**Local development**
 
-## 7. Runtime Diagnostics
+- Use `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG=false` if testing call initiation only (no webhook).
+- Set `VAPI_PREFLIGHT_REQUIRED_FOR_CAMPAIGN=true` to validate assistant + phone IDs before dialing.
 
-- Vapi readiness: `GET /diagnostics/vapi-preflight`
-- Typical local-dev expectation (no webhook): `ok=true`, `assistant_has_server=false`
-- Typical full lifecycle expectation (with webhook): `ok=true` and assistant/phone/server checks all passing
+**Webhook testing with ngrok**
 
-## Key Robustness Features
+1. Start the backend locally.
+2. `ngrok http 8000`
+3. Set Vapi assistant server URL to `https://<ngrok-url>/webhook/vapi`.
+4. Set `VAPI_REQUIRE_ASSISTANT_SERVER_CONFIG=true`.
+5. Confirm `GET /diagnostics/vapi-preflight` returns `ok=true`.
 
-- Durable DB-backed campaign queue with retries and job leasing
-- Persistent webhook idempotency (`processedwebhookevent`)
-- Audit trail (`auditevent`) for campaign/webhook actions
-- Optional dashboard API-key protection and endpoint rate limits
-- Optional Vapi secret and Twilio signature validation
-- Security headers, CORS allow-list, and PII redaction in logs
-- Vapi/Twilio retry + circuit breaker protections
+**Production notes**
 
-## CI
+- Switch from SQLite to PostgreSQL for production workloads.
+- Use a secrets manager instead of `.env` files.
+- Enable `TWILIO_VALIDATE_SIGNATURE=true` and `VAPI_WEBHOOK_SECRET`.
+- Set `DASHBOARD_API_KEY` and consider adding OAuth/SAML for dashboard access.
+- Review rate limits and concurrency settings for your call volume.
 
-GitHub Actions workflow (`.github/workflows/ci.yml`) runs:
+## Contributing
 
-- backend tests
-- frontend tests + build
-- security checks (`bandit`, `pip-audit`, `npm audit`, `gitleaks`)
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch strategy, and test checklist.
 
-## Additional Docs
+## License
 
-- `backend/README.md`
-- `docs/WEBHOOK-OPERATIONS-RUNBOOK.md`
-- `docs/vapi-system-prompt.md`
-- `docs/CONTRIBUTING-RUNBOOK.md`
+[MIT](LICENSE)

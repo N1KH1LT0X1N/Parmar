@@ -4,7 +4,7 @@
 
 ## Summary
 
-First complete demo release of the Parmar AI Calling Agent.
+First complete demo release of the AI Outbound Calling Agent.
 
 This release includes:
 
